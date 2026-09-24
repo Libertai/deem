@@ -79,3 +79,15 @@ extended-reasoning mode.
 
 Apache-2.0. Qwen3.5 backbone (Apache-2.0). All benchmarks reproducible
 from the release artifacts.
+
+## Citation
+
+```bibtex
+@software{deem2026,
+  title  = {Deem: Typed, Calibrated Decisions from Open Weights},
+  author = {{LibertAI Labs}},
+  year   = {2026},
+  url    = {https://github.com/Libertai/deem},
+  note   = {Deem 9B (deem-9b-v1) and Deem 0.8B (deem-0.8-v1)}
+}
+```
