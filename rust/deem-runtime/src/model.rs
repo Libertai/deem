@@ -210,9 +210,19 @@ pub fn load_model(dir: &Path, opts: LoadOptions) -> std::io::Result<Model> {
     m.head = if m.config.tie_word_embeddings {
         m.embed.clone()
     } else {
-        match lin("lm_head.weight".to_string()) {
+        // lm_head lives outside the model prefix in merged checkpoints
+        // (e.g. lm_head.weight vs model.language_model.lm_head.weight).
+        let prefixed = format!("{prefix}.lm_head.weight");
+        match get2(&tensors, &prefixed, "lm_head.weight")
+            .or_else(|_| get2(&tensors, "lm_head.weight", "lm_head.weight"))
+        {
             Ok(h) => h,
-            Err(_) => m.embed.clone(),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "lm_head.weight not found and tie_word_embeddings is false",
+                ))
+            }
         }
     };
     Ok(m)
@@ -242,6 +252,74 @@ impl Model {
         let out = self.forward_hidden_inner(tokens, Some(&mut t));
         eprintln!("{t}");
         out
+    }
+
+    /// Hidden state after each layer block (post attn+MLP), for parity
+    /// bisection. Index i of the returned Vec is the hidden state after
+    /// layer i's full block; the final element is the final-normed output.
+    pub fn forward_trace(&self, tokens: &[u32]) -> Vec<Vec<f32>> {
+        let t = tokens.len();
+        let hidden = self.config.hidden_size;
+        let mut x = vec![0.0f32; t * hidden];
+        for (p, tok) in tokens.iter().enumerate() {
+            let base = (*tok as usize) * hidden;
+            x[p * hidden..(p + 1) * hidden]
+                .copy_from_slice(&self.embed[base..base + hidden]);
+        }
+        let mut trace = Vec::with_capacity(self.config.layer_types.len() + 1);
+        let mut attn_counter = 0usize;
+        for (i, kind) in self.config.layer_types.iter().enumerate() {
+            let normed = rmsnorm_batch(
+                &x,
+                &self.input_layernorm[i],
+                self.config.rms_eps,
+                t,
+                hidden,
+            );
+            let out = match kind {
+                LayerKind::LinearAttention => self.gdn_forward(i, &normed, t),
+                LayerKind::FullAttention => {
+                    let idx = attn_counter;
+                    attn_counter += 1;
+                    full_attention_forward(
+                        &normed,
+                        t,
+                        &self.attn_q[idx],
+                        &self.attn_k[idx],
+                        &self.attn_v[idx],
+                        &self.attn_o[idx],
+                        &self.q_norm[idx],
+                        &self.k_norm[idx],
+                        &self.rope,
+                        &self.config,
+                    )
+                }
+            };
+            for (a, b) in x.iter_mut().zip(out.iter()) {
+                *a += b;
+            }
+            let normed = rmsnorm_batch(
+                &x,
+                &self.post_attention_layernorm[i],
+                self.config.rms_eps,
+                t,
+                hidden,
+            );
+            let mlp_out = self.mlp[i].forward(&normed, t);
+            for (a, b) in x.iter_mut().zip(mlp_out.iter()) {
+                *a += b;
+            }
+            trace.push(x.clone());
+        }
+        let final_h = rmsnorm_batch(
+            &x,
+            &self.final_norm,
+            self.config.rms_eps,
+            t,
+            hidden,
+        );
+        trace.push(final_h);
+        trace
     }
 
     fn forward_hidden_inner(&self, tokens: &[u32], mut timing: Option<&mut Timings>) -> Vec<f32> {
@@ -349,6 +427,7 @@ impl Model {
         let cfg = &self.config;
         let hidden = cfg.hidden_size;
         let num_heads = cfg.linear_num_value_heads;
+        let num_k_heads = cfg.linear_num_key_heads;
         let dk = cfg.linear_key_head_dim;
         let dv = cfg.linear_value_head_dim;
         let idx = gdn_layer_index(self, layer_idx);
@@ -413,8 +492,13 @@ impl Model {
             co
         };
 
-        // split q [t, H, dk], k [t, H, dk], v [t, H, dv]
-        let key_dim = dk * num_heads;
+        // split q [t, Hk, dk], k [t, Hk, dk], v [t, Hv, dv] — GQA layout:
+        // key heads and value heads differ (e.g. deem-9b: 16 key / 32 value).
+        // Matches transformers' Qwen3NextGatedDeltaNet: split as
+        // [key_dim, key_dim, value_dim], then q/k are repeat_interleave'd
+        // to value heads before the delta-rule scan.
+        let key_dim = dk * num_k_heads;
+        let gqa = num_heads / num_k_heads.max(1);
         let mut q = vec![0.0f32; t * num_heads * dk];
         let mut k = vec![0.0f32; t * num_heads * dk];
         let mut v = vec![0.0f32; t * num_heads * dv];
@@ -423,12 +507,13 @@ impl Model {
         let dt_bias = &self.gdn_dt_bias[idx];
         let a_log = &self.gdn_a_log[idx];
         for p in 0..t {
-            let row = &mixed[p * conv_dim..(p + 1) * conv_dim];
             for h in 0..num_heads {
+                let kh = h / gqa.max(1);
                 for d in 0..dk {
-                    q[(p * num_heads + h) * dk + d] = conv_out[p * conv_dim + h * dk + d];
+                    q[(p * num_heads + h) * dk + d] =
+                        conv_out[p * conv_dim + kh * dk + d];
                     k[(p * num_heads + h) * dk + d] =
-                        conv_out[p * conv_dim + key_dim + h * dk + d];
+                        conv_out[p * conv_dim + key_dim + kh * dk + d];
                     v[(p * num_heads + h) * dv + d] =
                         conv_out[p * conv_dim + 2 * key_dim + h * dv + d];
                 }

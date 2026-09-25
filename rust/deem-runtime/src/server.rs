@@ -73,10 +73,27 @@ struct ParsedQuestion {
 
 fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
     let state = body.get("state").ok_or("missing state")?.clone();
-    let questions = body
-        .get("questions")
-        .and_then(|q| q.as_object())
-        .ok_or("missing questions object")?;
+    let questions_value = body.get("questions").ok_or("missing questions")?;
+    // Both wire forms, matching parse_questions in serve/deem_server.py:
+    let questions: Vec<(String, &Value)> = if let Some(obj) = questions_value.as_object() {
+        if obj.is_empty() {
+            return Err("'questions' must contain at least one question".to_string());
+        }
+        obj.iter().map(|(k, v)| (k.clone(), v)).collect()
+    } else if let Some(arr) = questions_value.as_array() {
+        let mut items = Vec::with_capacity(arr.len());
+        for q in arr {
+            let qid = q
+                .get("id")
+                .or_else(|| q.get("qid"))
+                .and_then(|v| v.as_str())
+                .ok_or("list-form questions need an 'id' field")?;
+            items.push((qid.to_string(), q));
+        }
+        items
+    } else {
+        return Err("'questions' must be an object or a list".to_string());
+    };
 
     let top_dataset = body
         .get("dataset")
@@ -85,7 +102,6 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
 
     let mut parsed = Vec::new();
     for (qid, q) in questions {
-        let qid = qid.clone();
         let qtype = q
             .get("type")
             .and_then(|t| t.as_str())
@@ -354,4 +370,58 @@ fn answer_json(ans: &Answer, temperature: f32) -> Value {
 
 fn round5(v: f32) -> f32 {
     (v * 100000.0).round() / 100000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_request_object_form() {
+        let body = json!({
+            "state": "s",
+            "questions": {
+                "q1": {"type": "choice", "instructions": "pick",
+                        "options": ["a", "b"]},
+            },
+        });
+        let (_, questions) = parse_request(&body).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].qid, "q1");
+    }
+
+    #[test]
+    fn parse_request_list_form() {
+        // The form used by the README quickstart and serve/deem_server.py.
+        let body = json!({
+            "state": "s",
+            "questions": [
+                {"id": "q1", "type": "noul", "instructions": "is it?"},
+                {"qid": "q2", "type": "score", "instructions": "how much?",
+                 "levels": ["low", "high"]},
+            ],
+        });
+        let (_, questions) = parse_request(&body).unwrap();
+        assert_eq!(questions.len(), 2);
+        assert_eq!(questions[0].qid, "q1");
+        assert_eq!(questions[0].qtype, "noul");
+        assert_eq!(questions[1].qid, "q2");
+        assert_eq!(questions[1].qtype, "score");
+    }
+
+    #[test]
+    fn parse_request_list_form_requires_id() {
+        let body = json!({
+            "state": "s",
+            "questions": [{"type": "noul", "instructions": "is it?"}],
+        });
+        assert!(parse_request(&body).is_err());
+    }
+
+    #[test]
+    fn parse_request_rejects_scalar_questions() {
+        let body = json!({"state": "s", "questions": "all of them"});
+        assert!(parse_request(&body).is_err());
+    }
 }

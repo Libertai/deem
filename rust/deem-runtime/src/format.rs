@@ -231,7 +231,7 @@ pub fn read_answers(
                 let value = probs[1];
                 Answer::Noul {
                     value,
-                    confidence: 2.0 * value.max(1.0 - value),
+                    confidence: 2.0 * value.max(1.0 - value) - 1.0,
                 }
             }
             Question::Choice { options, .. } => {

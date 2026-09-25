@@ -61,6 +61,26 @@ fn report(name: &str, got: &[f32], want: &[f32]) -> f32 {
 }
 
 #[test]
+fn parity_tokenizer() {
+    let ckpt = std::env::var("DEEM_PARITY_CKPT")
+        .unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
+    if !Path::new(&ckpt).exists() {
+        eprintln!("checkpoint {ckpt} not found locally; skipping");
+        return;
+    }
+    let prompt = "<state>\n{\"compact\": \"deploy box prod-1: build #4021 green, 3 unit tests flaky, Friday 16:55\"}\n</state>\n\nQuestion 1: What should we do with this release?\nOptions:\n(A) deploy\n(B) hold\n(C) rollback\nAnswer 1: (";
+    let tok = deem_runtime::tokenizer::Tokenizer::load(Path::new(&ckpt)).unwrap();
+    let got = tok.encode(prompt);
+    let want: Vec<u32> = load_i32("tokens").iter().map(|x| *x as u32).collect();
+    println!("rust tokens: {}", got.len());
+    println!("ref  tokens: {}", want.len());
+    assert_eq!(got.len(), want.len(), "token count mismatch");
+    for (i, (a, b)) in got.iter().zip(want.iter()).enumerate() {
+        assert_eq!(a, b, "token mismatch at {i}: rust {a} != ref {b}");
+    }
+}
+
+#[test]
 fn parity_reference() {
     let ckpt = std::env::var("DEEM_PARITY_CKPT")
         .unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
@@ -105,6 +125,25 @@ fn parity_reference() {
 
     // 2) letter logits (full forward + head)
     let hidden_states = model.forward_hidden(&tokens);
+
+    // 4) layer-by-layer drift (before `model` is moved into the Readout)
+    let num_layers = model.config.layer_types.len();
+    let layer_kinds: Vec<_> = model.config.layer_types.clone();
+    let trace = model.forward_trace(&tokens);
+    let mut first_bad: Option<(usize, f32)> = None;
+    for i in 0..num_layers {
+        let want = load_f32(&format!("layer_{i}"), None);
+        let d = report(&format!("layer_{i}"), &trace[i], &want);
+        if d > 0.05 && first_bad.is_none() {
+            first_bad = Some((i, d));
+        }
+    }
+    if let Some((i, d)) = first_bad {
+        eprintln!(
+            "first divergence at layer {i} (kind {:?}, max_abs_diff {d:.4})",
+            layer_kinds[i]
+        );
+    }
     let final_ref = load_f32("final_norm", None);
     {
         let readout = deem_runtime::readout::Readout {
@@ -134,15 +173,4 @@ fn parity_reference() {
             b'A' + i as u8
         );
     }
-
-    // 4) layer-by-layer drift
-    let mut layer_hidden = hidden_states.clone();
-    let _ = &mut layer_hidden;
-    let manifest: HashMap<String, serde_json::Value> = {
-        let dir = std::env::var("DEEM_PARITY_DIR").unwrap();
-        let text = fs::read_to_string(Path::new(&dir).join("manifest.json")).unwrap();
-        serde_json::from_str(&text).unwrap()
-    };
-    let _ = manifest;
-    let _ = &load_f32("layer_0", None);
 }
