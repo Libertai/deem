@@ -51,6 +51,8 @@ struct TextConfigRaw {
     #[serde(default)]
     layer_types: Option<Vec<String>>,
     #[serde(default)]
+    model_type: Option<String>,
+    #[serde(default)]
     num_attention_heads: Option<usize>,
     #[serde(default)]
     num_key_value_heads: Option<usize>,
@@ -97,6 +99,12 @@ pub struct Config {
     pub linear_value_head_dim: usize,
     pub rope_theta: f64,
     pub partial_rotary_factor: f64,
+    /// Qwen3.5's Qwen3_5RMSNorm is zero-centered (out = norm(x) * (1 + w));
+    /// dense Qwen3 uses the standard form (out = norm(x) * w).
+    pub zero_centered_norm: bool,
+    /// Qwen3.5's attention gates the head output (q_proj emits q and a
+    /// sigmoid gate); dense Qwen3 has no attention gating.
+    pub gated_attention: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +122,9 @@ pub fn load_config(text: &str) -> std::io::Result<Config> {
 
     let full_attention_interval = raw.full_attention_interval.unwrap_or(4);
     let num_layers = raw.num_hidden_layers.ok_or(missing("num_hidden_layers"))?;
+    // Dense Qwen3 backbones are full-attention only; hybrid Qwen3.5 mixes
+    // GDN linear attention in (layer list, or the interval fallback).
+    let dense = raw.model_type.as_deref() == Some("qwen3");
     let layer_types: Vec<LayerKind> = match raw.layer_types {
         Some(types) => types
             .iter()
@@ -124,7 +135,7 @@ pub fn load_config(text: &str) -> std::io::Result<Config> {
             .collect(),
         None => (0..num_layers)
             .map(|i| {
-                if (i + 1) % full_attention_interval == 0 {
+                if dense || (i + 1) % full_attention_interval == 0 {
                     LayerKind::FullAttention
                 } else {
                     LayerKind::LinearAttention
@@ -164,6 +175,8 @@ pub fn load_config(text: &str) -> std::io::Result<Config> {
         linear_value_head_dim: raw.linear_value_head_dim.unwrap_or(128),
         rope_theta: rope.rope_theta,
         partial_rotary_factor: rope.partial_rotary_factor,
+        zero_centered_norm: !dense,
+        gated_attention: !dense,
     })
 }
 

@@ -48,17 +48,30 @@ pub fn sigmoid(x: f32) -> f32 {
     }
 }
 
-/// Qwen3_5RMSNorm (zero-centered): out = norm(x) * (1 + w), in f32.
-/// x: [t, d] -> [t, d]
-pub fn rmsnorm_batch(x: &[f32], w: &[f32], eps: f32, t: usize, d: usize) -> Vec<f32> {
+/// RMSNorm over a batch of rows. Qwen3.5 (zero-centered): out = norm(x) * (1 + w);
+/// dense Qwen3 (standard): out = norm(x) * w. x: [t, d] -> [t, d]
+pub fn rmsnorm_batch(
+    x: &[f32],
+    w: &[f32],
+    eps: f32,
+    t: usize,
+    d: usize,
+    zero_centered: bool,
+) -> Vec<f32> {
     let mut out = vec![0.0f32; x.len()];
     out.par_chunks_exact_mut(d)
         .zip(x.par_chunks_exact(d))
         .for_each(|(orow, xrow)| {
             let acc: f32 = xrow.iter().map(|v| v * v).sum();
             let inv = (acc / d as f32 + eps).recip().sqrt();
-            for j in 0..d {
-                orow[j] = xrow[j] * inv * (1.0 + w[j]);
+            if zero_centered {
+                for j in 0..d {
+                    orow[j] = xrow[j] * inv * (1.0 + w[j]);
+                }
+            } else {
+                for j in 0..d {
+                    orow[j] = xrow[j] * inv * w[j];
+                }
             }
         });
     out
@@ -334,29 +347,40 @@ pub fn full_attention_forward(
     let hd = cfg.head_dim;
     let n_kv_rep = h / kv_h;
     let scaling = (hd as f32).recip().sqrt();
+    let gated = cfg.gated_attention;
 
-    let qg = q_proj.forward(hidden, t); // [t, h*hd*2]
+    let qg = q_proj.forward(hidden, t); // [t, h*hd*2] gated, [t, h*hd] plain
     let kf = k_proj.forward(hidden, t); // [t, kv_h*hd]
     let vf = v_proj.forward(hidden, t); // [t, kv_h*hd]
 
-    // q = [t, h, hd], gate = [t, h, hd] (contiguous halves)
+    // q = [t, h, hd]; gate = [t, h, hd] (contiguous halves, gated models only)
     let mut q = vec![0.0f32; t * h * hd];
     let mut gate = vec![0.0f32; t * h * hd];
-    for p in 0..t {
-        let row = &qg[p * h * hd * 2..(p + 1) * h * hd * 2];
-        for head in 0..h {
-            let src = &row[head * hd * 2..(head + 1) * hd * 2];
-            let dst = (p * h + head) * hd;
-            q[dst..dst + hd].copy_from_slice(&src[..hd]);
-            gate[dst..dst + hd].copy_from_slice(&src[hd..]);
+    if gated {
+        for p in 0..t {
+            let row = &qg[p * h * hd * 2..(p + 1) * h * hd * 2];
+            for head in 0..h {
+                let src = &row[head * hd * 2..(head + 1) * hd * 2];
+                let dst = (p * h + head) * hd;
+                q[dst..dst + hd].copy_from_slice(&src[..hd]);
+                gate[dst..dst + hd].copy_from_slice(&src[hd..]);
+            }
+        }
+    } else {
+        for p in 0..t {
+            let row = &qg[p * h * hd..(p + 1) * h * hd];
+            for head in 0..h {
+                let dst = (p * h + head) * hd;
+                q[dst..dst + hd].copy_from_slice(&row[head * hd..(head + 1) * hd]);
+            }
         }
     }
 
-    // zero-centered RMSNorm over the head vector, then rope
+    // RMSNorm over the head vector, then rope
     for p in 0..t {
         for head in 0..h {
             let v = &mut q[(p * h + head) * hd..(p * h + head) * hd + hd];
-            norm_inplace(v, q_norm_w);
+            norm_inplace(v, q_norm_w, cfg.zero_centered_norm);
         }
     }
     let mut k = vec![0.0f32; t * kv_h * hd];
@@ -367,7 +391,7 @@ pub fn full_attention_forward(
             for d in 0..hd {
                 v[d] = kf[src + d];
             }
-            norm_inplace(v, k_norm_w);
+            norm_inplace(v, k_norm_w, cfg.zero_centered_norm);
         }
     }
     for p in 0..t {
@@ -484,20 +508,32 @@ pub fn full_attention_forward(
     });
 
     // output gating + o_proj
-    let mut gated = vec![0.0f32; t * h * hd];
-    for i in 0..t * h * hd {
-        gated[i] = attn[i] * sigmoid(gate[i]);
-    }
-    o_proj.forward(&gated, t)
+    let o_in = if gated {
+        let mut gated = vec![0.0f32; t * h * hd];
+        for i in 0..t * h * hd {
+            gated[i] = attn[i] * sigmoid(gate[i]);
+        }
+        gated
+    } else {
+        attn
+    };
+    o_proj.forward(&o_in, t)
 }
 
+/// RMSNorm over one head vector; zero-centered (Qwen3.5) or plain (Qwen3).
 #[inline]
-fn norm_inplace(v: &mut [f32], w: &[f32]) {
+fn norm_inplace(v: &mut [f32], w: &[f32], zero_centered: bool) {
     let hd = v.len();
     let acc: f32 = v.iter().map(|x| x * x).sum();
     let inv = (acc / hd as f32 + 1e-6).recip().sqrt();
-    for d in 0..hd {
-        v[d] = v[d] * inv * (1.0 + w[d]);
+    if zero_centered {
+        for d in 0..hd {
+            v[d] = v[d] * inv * (1.0 + w[d]);
+        }
+    } else {
+        for d in 0..hd {
+            v[d] = v[d] * inv * w[d];
+        }
     }
 }
 

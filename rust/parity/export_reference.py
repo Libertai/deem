@@ -70,10 +70,15 @@ def main():
         h = model.model.embed_tokens(input_ids)
         per_layer["embed"] = h[0].float().cpu().numpy()
         position_ids = torch.arange(len(ids), device=device).unsqueeze(0)
+        # Qwen3.5 rotary takes 3D mrope positions; dense Qwen3 takes [1, t]
+        dense = getattr(model.config, "model_type", "") == "qwen3"
         for i, layer in enumerate(model.model.layers):
             if hasattr(layer, "self_attn"):
                 rope = model.model.rotary_emb
-                pos_embeddings = rope(h, position_ids.expand(3, -1, -1).float())
+                if dense:
+                    pos_embeddings = rope(h, position_ids.float())
+                else:
+                    pos_embeddings = rope(h, position_ids.expand(3, -1, -1).float())
             else:
                 pos_embeddings = None
             out = layer(h, position_embeddings=pos_embeddings, position_ids=None)

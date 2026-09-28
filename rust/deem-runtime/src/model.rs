@@ -191,7 +191,11 @@ pub fn load_model(dir: &Path, opts: LoadOptions) -> std::io::Result<Model> {
                 .push(lin(format!("layers.{i}.linear_attn.norm.weight"))?);
             m.gdn_out_proj.push(qn(format!("layers.{i}.linear_attn.out_proj.weight"), hidden, value_dim));
         } else {
-            let qo = m.config.num_heads * m.config.head_dim * 2;
+            let qo = if m.config.gated_attention {
+                m.config.num_heads * m.config.head_dim * 2
+            } else {
+                m.config.num_heads * m.config.head_dim
+            };
             let ko = m.config.num_kv_heads * m.config.head_dim;
             m.attn_q.push(qn(format!("layers.{i}.self_attn.q_proj.weight"), qo, hidden));
             m.attn_k.push(qn(format!("layers.{i}.self_attn.k_proj.weight"), ko, hidden));
@@ -275,6 +279,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
+                            self.config.zero_centered_norm,
             );
             let out = match kind {
                 LayerKind::LinearAttention => self.gdn_forward(i, &normed, t),
@@ -304,6 +309,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
+                            self.config.zero_centered_norm,
             );
             let mlp_out = self.mlp[i].forward(&normed, t);
             for (a, b) in x.iter_mut().zip(mlp_out.iter()) {
@@ -317,6 +323,7 @@ impl Model {
             self.config.rms_eps,
             t,
             hidden,
+                    self.config.zero_centered_norm,
         );
         trace.push(final_h);
         trace
@@ -341,6 +348,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
+                            self.config.zero_centered_norm,
             );
             let out = match kind {
                 LayerKind::LinearAttention => {
@@ -384,6 +392,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
+                            self.config.zero_centered_norm,
             );
             let start = std::time::Instant::now();
             let mlp_out = self.mlp[i].forward(&normed, t);
@@ -401,6 +410,7 @@ impl Model {
             self.config.rms_eps,
             t,
             hidden,
+                    self.config.zero_centered_norm,
         )
     }
 }
