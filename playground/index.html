@@ -949,13 +949,34 @@ function collectRequest() {
         throw new Error(`Question ${i + 1} (${q.type}) needs at least ${min} ${noun}.`);
       if (values.length > max)
         throw new Error(`Question ${i + 1} (${q.type}) allows at most ${max} ${noun}.`);
-      if (q.type === "choice") q.options = values;
-      else q.levels = values;
+      if (new Set(values).size !== values.length)
+        throw new Error(`Question ${i + 1} (${q.type}) has duplicate ${noun}.`);
+      q.values = values;
     }
     questions.push(q);
   });
 
   return { state: stateText, questions };
+}
+
+// TypeSafe wire body: questions keyed by id; choice criteria map each
+// option to a description (none here), score criteria list the levels.
+function wireBody(request) {
+  const questions = {};
+  for (const q of request.questions) {
+    const wire = { type: q.type, instructions: q.instructions };
+    if (q.type === "choice") wire.criteria = Object.fromEntries(q.values.map(v => [v, null]));
+    else if (q.type === "score") wire.criteria = q.values;
+    questions[q.id] = wire;
+  }
+  return { state: request.state, questions };
+}
+
+function errorMessage(e, fallback) {
+  const d = e && e.detail;
+  if (Array.isArray(d))
+    return d.map(x => (x.loc || []).slice(1).join(".") + ": " + x.msg).join("; ");
+  return (d && d.message) || fallback;
 }
 
 function renderError(msg) {
@@ -1004,12 +1025,13 @@ function renderResults(payload, request) {
       body = barList(entries, top);
     } else if (q.type === "score") {
       // ordinal levels stay in natural order — the ordering is the information
-      const entries = Object.entries(a.probabilities);
-      const top = Object.keys(a.probabilities)
+      const entries = Object.entries(a.probabilities)
+        .map(([k, p]) => [a.legend[k], p]);
+      const topKey = Object.keys(a.probabilities)
         .reduce((m, k) => (a.probabilities[k] > a.probabilities[m] ? k : m));
-      body = barList(entries, top);
+      body = barList(entries, a.legend[topKey]);
     } else {
-      const v = a.value;
+      const v = a.noul;
       body = `
         <div class="noul-gauge">
           <div class="noul-fill" data-w="${(v * 100).toFixed(1)}"></div>
@@ -1020,16 +1042,15 @@ function renderResults(payload, request) {
           <span class="against">against ${fmt(1 - v)}</span>
         </div>`;
     }
+    const confidence = q.type === "noul" ? a.x_confidence : a.confidence;
     const stats = [
-      statRow("confidence", a.confidence != null ? a.confidence.toFixed(4) : "—"),
+      statRow("confidence", confidence != null ? confidence.toFixed(4) : "—"),
     ];
-    if (a.temperature != null) stats.push(statRow("temp", a.temperature.toFixed(3)));
-    if (q.type === "score" && a.expected != null) {
-      const idx = q.levels.findIndex(l =>
-        l.toLowerCase() === String(a.level).toLowerCase());
-      const oneBased = idx >= 0 ? idx + 1 : null;
-      stats.push(statRow("expected", Number(a.expected).toFixed(2) +
-        (oneBased ? ` (${q.levels[0]}=1 … ${q.levels[q.levels.length - 1]}=${q.levels.length})` : "")));
+    if (a.x_temperature != null) stats.push(statRow("temp", a.x_temperature.toFixed(3)));
+    if (q.type === "score" && a.score != null) {
+      const n = Object.keys(a.legend).length;
+      stats.push(statRow("score", Number(a.score).toFixed(2) +
+        ` (${escapeHtml(a.legend[0])}=0 … ${escapeHtml(a.legend[n - 1])}=${n - 1})`));
     }
     html += `
       <div class="r-item">
@@ -1042,7 +1063,7 @@ function renderResults(payload, request) {
   }
 
   resultsEl.innerHTML = `<h2 style="margin-bottom:14px;">Reader
-    <span class="hint">${usage.prompt_tokens != null ? usage.prompt_tokens + " tokens" : ""}</span></h2>` + html;
+    <span class="hint">${usage.input_tokens != null ? usage.input_tokens + " tokens" : ""}</span></h2>` + html;
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
@@ -1075,13 +1096,13 @@ async function ask() {
     const r = await fetch("/v1/systemone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify(wireBody(request)),
     });
     const ms = performance.now() - t0;
     latencyChip.textContent = ms.toFixed(0) + " ms";
     if (!r.ok) {
       let msg = "HTTP " + r.status;
-      try { const e = await r.json(); msg = (e.error && e.error.message) || msg; } catch {}
+      try { msg = errorMessage(await r.json(), msg); } catch {}
       throw new Error(msg);
     }
     const payload = await r.json();
