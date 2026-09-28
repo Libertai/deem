@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from conftest import FixedBackend
+from serve_helpers import FixedBackend
 from deem_mcp import McpServer, TOOLS
 from deem_server import DeemCore
 
