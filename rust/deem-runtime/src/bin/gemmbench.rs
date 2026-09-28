@@ -66,7 +66,8 @@ fn main() {
         let k = 1024usize;
         let a: Vec<f32> = vec![0.01; m * k];
         let b_q: Vec<i8> = vec![7; n * k];
-        let scales: Vec<f32> = vec![0.001; n];
+        let scales: Vec<f32> =
+            vec![0.001; n * k.div_ceil(deem_runtime::kernels::I8_WEIGHT_BLK)];
         let b_sums: Vec<i32> = vec![k as i32 * 7; n];
         let _ = deem_runtime::kernels::gemm_i8(&a, &b_q, &scales, m, n, k);
         let s = Instant::now();
