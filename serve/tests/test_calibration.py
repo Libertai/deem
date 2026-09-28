@@ -127,7 +127,7 @@ def test_calibration_end_to_end_temperature(tmp_path):
         # softmax([2/2, 0/2]) = [e^1 / (e^1 + 1), 1 / (e^1 + 1)]
         expected = math.exp(1.0) / (math.exp(1.0) + 1.0)
         assert answer["probabilities"]["yes"] == pytest.approx(expected)
-        assert answer["temperature"] == 2.0
+        assert answer["x_temperature"] == 2.0
 
 
 # ---------------------------------------------------------------------
@@ -196,7 +196,7 @@ def test_v6_per_class_application_end_to_end():
         ):
             assert got == pytest.approx(want)
         # reported temperature is the scalar fallback (per-dataset)
-        assert answer["temperature"] == 1.5
+        assert answer["x_temperature"] == 1.5
         # scalar scaling would have produced a different distribution
         scalar = _softmax([3.0 / 1.5, 2.0 / 1.5, 1.0 / 1.5])
         assert probs["a"] != pytest.approx(scalar[0])
@@ -234,7 +234,7 @@ def test_v6_fallback_chain():
         # 2. scalar per-dataset fallback (arity mismatch drops per-class)
         _, body = post(url, "/v1/systemone", _v6_payload("scalar_only"))
         answer = body["answers"]["q"]
-        assert answer["temperature"] == 3.0
+        assert answer["x_temperature"] == 3.0
         probs = answer["probabilities"]
         for got, want in zip(
             [probs["a"], probs["b"], probs["c"]],
@@ -245,7 +245,7 @@ def test_v6_fallback_chain():
         # 3. per-primitive fallback (unknown dataset)
         _, body = post(url, "/v1/systemone", _v6_payload("unknown_ds"))
         answer = body["answers"]["q"]
-        assert answer["temperature"] == 2.5
+        assert answer["x_temperature"] == 2.5
         probs = answer["probabilities"]
         for got, want in zip(
             [probs["a"], probs["b"], probs["c"]],
