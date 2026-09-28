@@ -1,5 +1,6 @@
 """HTTP contract of the /v1/systemone server (stub backends only)."""
 
+import json
 import math
 
 import pytest
@@ -27,29 +28,42 @@ def simple_payload(**overrides):
 
 
 # ---------------------------------------------------------------------------
-# Request validation
+# Request validation: 422 with FastAPI-style detail
 # ---------------------------------------------------------------------------
 
 
-def test_missing_state_400(base_url):
+def assert_422(status, body, loc=None, typ="value_error"):
+    assert status == 422
+    (error,) = body["detail"]
+    assert error["type"] == typ
+    assert isinstance(error["msg"], str)
+    assert error["loc"][0] == "body"
+    if loc is not None:
+        assert error["loc"] == loc
+
+
+def one_question(spec):
+    return {"state": "x", "questions": {"q": spec}}
+
+
+def test_missing_state_422(base_url):
     status, body = post(
         base_url, systemone_url(), {"questions": simple_payload()["questions"]}
     )
-    assert status == 400
-    assert "error" in body
+    assert_422(status, body, ["body", "state"])
 
 
-def test_missing_questions_400(base_url):
+def test_missing_questions_422(base_url):
     status, body = post(base_url, systemone_url(), {"state": "hello"})
-    assert status == 400
+    assert_422(status, body, ["body", "questions"])
 
 
-def test_empty_questions_400(base_url):
+def test_empty_questions_422(base_url):
     status, body = post(base_url, systemone_url(), {"state": "x", "questions": {}})
-    assert status == 400
+    assert_422(status, body, ["body", "questions"])
 
 
-def test_malformed_json_400(base_url):
+def test_malformed_json_422(base_url):
     import urllib.error
     import urllib.request
 
@@ -60,150 +74,157 @@ def test_malformed_json_400(base_url):
     )
     try:
         urllib.request.urlopen(request, timeout=30)
-        raise AssertionError("expected 400")
+        raise AssertionError("expected 422")
     except urllib.error.HTTPError as exc:
-        assert exc.code == 400
-        assert b"error" in exc.read()
+        body = json.loads(exc.read())
+        assert_422(exc.code, body, ["body"], typ="json_invalid")
 
 
-def test_one_option_choice_400(base_url):
+def test_body_too_large_413(base_url):
+    import http.client
+    from urllib.parse import urlparse
+
+    from deem_server import MAX_BODY_BYTES
+
+    conn = http.client.HTTPConnection(urlparse(base_url).netloc, timeout=30)
+    conn.putrequest("POST", systemone_url())
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", str(MAX_BODY_BYTES + 1))
+    conn.endheaders()
+    response = conn.getresponse()
+    assert response.status == 413
+    body = json.loads(response.read())
+    conn.close()
+    assert body["detail"]["error_type"] == "request_too_large"
+    assert body["detail"]["message"]
+
+
+def test_one_option_choice_422(base_url):
     status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "choice",
-                    "instructions": "pick",
-                    "options": ["only one"],
-                }
-            },
-        },
+        one_question({"type": "choice", "instructions": "pick", "criteria": {"only": None}}),
     )
-    assert status == 400
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
 
 
-def test_256_options_choice_400(base_url):
-    options = [f"option {i}" for i in range(256)]
-    status, _ = post(
+def test_one_option_legacy_options_422(base_url):
+    status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "choice",
-                    "instructions": "pick",
-                    "options": options,
-                }
-            },
-        },
+        one_question({"type": "choice", "instructions": "pick", "options": ["one"]}),
     )
-    assert status == 400
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
+
+
+def test_256_options_choice_422(base_url):
+    criteria = {f"option {i}": None for i in range(256)}
+    status, body = post(
+        base_url,
+        systemone_url(),
+        one_question({"type": "choice", "instructions": "pick", "criteria": criteria}),
+    )
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
 
 
 def test_255_options_ok(base_url):
-    options = [f"option {i}" for i in range(255)]
+    criteria = {f"option {i}": None for i in range(255)}
     status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "choice",
-                    "instructions": "pick",
-                    "options": options,
-                }
-            },
-        },
+        one_question({"type": "choice", "instructions": "pick", "criteria": criteria}),
     )
     assert status == 200
     assert len(body["answers"]["q"]["probabilities"]) == 255
 
 
-def test_eleven_levels_400(base_url):
-    status, _ = post(
-        base_url,
-        systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "score",
-                    "instructions": "rate",
-                    "levels": [f"L{i}" for i in range(11)],
-                }
-            },
-        },
-    )
-    assert status == 400
-
-
-def test_single_level_400(base_url):
-    status, _ = post(
-        base_url,
-        systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "score",
-                    "instructions": "rate",
-                    "levels": ["high"],
-                }
-            },
-        },
-    )
-    assert status == 400
-
-
-def test_unknown_question_type_400(base_url):
+def test_eleven_levels_422(base_url):
     status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {"q": {"type": "vibe", "instructions": "?"}},
-        },
+        one_question(
+            {"type": "score", "instructions": "rate", "criteria": [f"L{i}" for i in range(11)]}
+        ),
     )
-    assert status == 400
-    assert "vibe" in body["error"]["message"]
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
 
 
-def test_duplicate_options_400(base_url):
-    status, _ = post(
+def test_single_level_422(base_url):
+    status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {
-                "q": {
-                    "type": "choice",
-                    "instructions": "pick",
-                    "options": ["same", "same"],
-                }
-            },
-        },
+        one_question({"type": "score", "instructions": "rate", "levels": ["high"]}),
     )
-    assert status == 400
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
 
 
-def test_missing_instructions_400(base_url):
-    status, _ = post(
+def test_unknown_question_type_422(base_url):
+    status, body = post(
+        base_url, systemone_url(), one_question({"type": "vibe", "instructions": "?"})
+    )
+    assert_422(status, body, ["body", "questions", "q", "type"])
+    assert "vibe" in body["detail"][0]["msg"]
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"type": "choice", "instructions": "pick", "criteria": ["a", "b"]},
+        {"type": "choice", "instructions": "pick"},
+        {"type": "choice", "instructions": "pick", "criteria": {"a": None, " ": None}},
+        {"type": "choice", "instructions": "pick", "criteria": {"a": None, "b\nc": None}},
+        {"type": "score", "instructions": "rate", "criteria": {"a": 1, "b": 2}},
+        {"type": "score", "instructions": "rate", "criteria": ["same", "same"]},
+        {"type": "score", "instructions": "rate"},
+        {"type": "noul", "instructions": "prop", "criteria": ["yes", "no"]},
+    ],
+)
+def test_bad_criteria_422(base_url, spec):
+    status, body = post(base_url, systemone_url(), one_question(spec))
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
+
+
+def test_legacy_non_string_options_422(base_url):
+    status, body = post(
         base_url,
         systemone_url(),
-        {
-            "state": "x",
-            "questions": {"q": {"type": "noul"}},
-        },
+        one_question({"type": "choice", "instructions": "pick", "options": ["a", 2]}),
     )
-    assert status == 400
+    assert_422(status, body, ["body", "questions", "q", "options"])
+
+
+def test_bad_instructions_type_422(base_url):
+    status, body = post(
+        base_url, systemone_url(), one_question({"type": "noul", "instructions": 3})
+    )
+    assert_422(status, body, ["body", "questions", "q", "instructions"])
+
+
+def test_duplicate_options_422(base_url):
+    status, body = post(
+        base_url,
+        systemone_url(),
+        one_question({"type": "choice", "instructions": "pick", "options": ["same", "same"]}),
+    )
+    assert_422(status, body, ["body", "questions", "q", "criteria"])
+
+
+def test_missing_instructions_ok(base_url):
+    backend = FixedBackend()
+    with live_server(backend=backend) as url:
+        status, body = post(
+            url,
+            systemone_url(),
+            one_question({"type": "noul", "criteria": {"true": "yes", "false": "no"}}),
+        )
+    assert status == 200
+    assert body["answers"]["q"]["type"] == "noul"
+    assert backend.calls[0][0].endswith(
+        "Question 1: \nTrue if: yes\nFalse if: no\nAnswer 1: ("
+    )
 
 
 def test_question_count_cap():
-    """The max-questions cap produces a 400, not a meltdown."""
     questions = {
         f"q{i}": {"type": "noul", "instructions": f"prop {i}"} for i in range(65)
     }
@@ -211,42 +232,95 @@ def test_question_count_cap():
         status, body = post(
             url, systemone_url(), {"state": "x", "questions": questions}
         )
-        assert status == 400
-        assert "question" in body["error"]["message"]
+        assert_422(status, body, ["body", "questions"])
+        assert "64" in body["detail"][0]["msg"]
 
 
-def test_backend_letter_cap_maps_to_400():
-    from deem_server import RequestError
-
+def test_backend_letter_cap_maps_to_422():
     class CappedBackend(FixedBackend):
         max_letters = 26
 
-        def slot_logits(self, prompts, n_valids):
-            for n in n_valids:
-                if n > self.max_letters:
-                    raise RequestError(
-                        f"backend reads at most {self.max_letters} letters",
-                        code="unsupported_option_count",
-                    )
-            return super().slot_logits(prompts, n_valids)
-
-    with live_server(backend=CappedBackend()) as url:
+    backend = CappedBackend()
+    with live_server(backend=backend) as url:
         status, body = post(
             url,
             systemone_url(),
-            {
-                "state": "x",
-                "questions": {
-                    "q": {
-                        "type": "choice",
-                        "instructions": "pick",
-                        "options": [f"o{i}" for i in range(27)],
-                    }
-                },
-            },
+            one_question(
+                {
+                    "type": "choice",
+                    "instructions": "pick",
+                    "criteria": {f"o{i}": None for i in range(27)},
+                }
+            ),
         )
-        assert status == 400
-        assert body["error"]["code"] == "unsupported_option_count"
+        assert_422(status, body, ["body", "questions", "q", "criteria"])
+        assert "26" in body["detail"][0]["msg"]
+        assert backend.calls == []
+
+
+# ---------------------------------------------------------------------------
+# TypeSafe criteria
+# ---------------------------------------------------------------------------
+
+
+def test_typesafe_criteria_request():
+    backend = FixedBackend()
+    payload = {
+        "model": "jev-latest",
+        "state": "Help! My payouts have been failing for 3 days.",
+        "questions": {
+            "urgent": {
+                "type": "noul",
+                "instructions": "Urgent?",
+                "criteria": {"true": "Time-sensitive", "false": "No urgency"},
+            },
+            "team": {
+                "type": "choice",
+                "instructions": {"question": "Which team?"},
+                "criteria": {"technical": "Bugs", "billing": None, "sales": {"x": 1}},
+            },
+            "mood": {
+                "type": "score",
+                "instructions": "Mood?",
+                "criteria": ["Calm", {"level": "Frustrated"}, "Very\nangry"],
+            },
+        },
+    }
+    with live_server(backend=backend) as url:
+        status, body = post(url, systemone_url(), payload)
+    assert status == 200
+    assert list(body["answers"]) == ["urgent", "team", "mood"]
+    urgent, team, mood = (c[0] for c in backend.calls)
+    assert urgent.endswith(
+        "Question 1: Urgent?\nTrue if: Time-sensitive\nFalse if: No urgency\n"
+        "Answer 1: ("
+    )
+    assert team.endswith(
+        'Question 1: {"question":"Which team?"}\nOptions:\n'
+        '(A) technical: Bugs\n(B) billing\n(C) sales: {"x":1}\nAnswer 1: ('
+    )
+    assert mood.endswith(
+        'Options:\n(A) Calm\n(B) {"level":"Frustrated"}\n(C) Very angry\n'
+        "Answer 1: ("
+    )
+    assert list(body["answers"]["team"]["probabilities"]) == [
+        "technical", "billing", "sales",
+    ]
+    assert body["answers"]["mood"]["legend"] == {
+        "0": "Calm", "1": '{"level":"Frustrated"}', "2": "Very angry",
+    }
+
+
+def test_legacy_and_criteria_render_identically():
+    backend = FixedBackend()
+    legacy = one_question({"type": "choice", "instructions": "pick", "options": ["a", "b"]})
+    typesafe = one_question(
+        {"type": "choice", "instructions": "pick", "criteria": {"a": None, "b": None}}
+    )
+    with live_server(backend=backend) as url:
+        assert post(url, systemone_url(), legacy)[0] == 200
+        assert post(url, systemone_url(), typesafe)[0] == 200
+    assert backend.calls[0] == backend.calls[1]
 
 
 # ---------------------------------------------------------------------------
@@ -257,16 +331,17 @@ def test_backend_letter_cap_maps_to_400():
 def test_choice_response_shape(base_url):
     status, body = post(base_url, systemone_url(), simple_payload())
     assert status == 200
+    assert set(body) == {"model", "answers", "usage"}
     assert body["model"] == "deem-test"
-    assert body["object"] == "systemone.completion"
-    assert body["id"].startswith("deem-")
+    assert set(body["usage"]) == {"input_tokens", "output_tokens"}
+    assert body["usage"]["output_tokens"] == 0
     answer = body["answers"]["deploy"]
+    assert set(answer) == {"type", "choice", "probabilities", "confidence", "x_temperature"}
     assert answer["type"] == "choice"
     assert answer["choice"] in ("deploy", "wait")
     assert set(answer["probabilities"]) == {"deploy", "wait"}
     assert answer["confidence"] == 0.0  # uniform stub
-    assert answer["temperature"] == 1.0
-    assert body["usage"]["questions"] == 1
+    assert answer["x_temperature"] == 1.0
 
 
 def test_score_response_shape(base_url):
@@ -279,17 +354,21 @@ def test_score_response_shape(base_url):
                 "urgency": {
                     "type": "score",
                     "instructions": "Rate the urgency.",
-                    "levels": ["low", "medium", "high", "critical"],
+                    "criteria": ["low", "medium", "high", "critical"],
                 }
             },
         },
     )
     assert status == 200
     answer = body["answers"]["urgency"]
+    assert set(answer) == {
+        "type", "score", "legend", "probabilities", "confidence", "x_temperature",
+    }
     assert answer["type"] == "score"
-    assert answer["level"] == "low"  # uniform -> first level wins ties
-    assert set(answer["probabilities"]) == {"low", "medium", "high", "critical"}
-    assert answer["expected"] == pytest.approx(1.5)  # uniform over 4 levels
+    assert answer["score"] == pytest.approx(1.5)  # uniform over 4 levels
+    assert answer["legend"] == {"0": "low", "1": "medium", "2": "high", "3": "critical"}
+    assert list(answer["probabilities"]) == ["0", "1", "2", "3"]
+    assert answer["probabilities"]["0"] == pytest.approx(0.25)
     assert answer["confidence"] == 0.0
 
 
@@ -309,9 +388,10 @@ def test_noul_response_shape(base_url):
     )
     assert status == 200
     answer = body["answers"]["blue"]
+    assert set(answer) == {"type", "noul", "x_confidence", "x_temperature"}
     assert answer["type"] == "noul"
-    assert answer["value"] == pytest.approx(0.5)  # uniform stub
-    assert answer["confidence"] == pytest.approx(0.0)
+    assert answer["noul"] == pytest.approx(0.5)  # uniform stub
+    assert answer["x_confidence"] == pytest.approx(0.0)
 
 
 def test_list_form_questions(base_url):
@@ -325,16 +405,26 @@ def test_list_form_questions(base_url):
                     "id": "a",
                     "type": "noul",
                     "instructions": "prop",
-                }
+                },
+                {"qid": "b", "type": "score", "instructions": "rate", "levels": ["lo", "hi"]},
             ],
         },
     )
     assert status == 200
-    assert "a" in body["answers"]
+    assert list(body["answers"]) == ["a", "b"]
 
 
-def test_duplicate_question_ids_400(base_url):
-    status, _ = post(
+def test_list_form_requires_id(base_url):
+    status, body = post(
+        base_url,
+        systemone_url(),
+        {"state": "x", "questions": [{"type": "noul", "instructions": "p"}]},
+    )
+    assert_422(status, body, ["body", "questions"])
+
+
+def test_duplicate_question_ids_422(base_url):
+    status, body = post(
         base_url,
         systemone_url(),
         {
@@ -345,7 +435,7 @@ def test_duplicate_question_ids_400(base_url):
             ],
         },
     )
-    assert status == 400
+    assert_422(status, body, ["body", "questions"])
 
 
 # ---------------------------------------------------------------------------
@@ -403,10 +493,10 @@ def test_noul_confidence_binary():
         )
         assert status == 200
         answer = body["answers"]["q"]
-        p = answer["value"]
+        p = answer["noul"]
         assert p > 0.9
         # binary confidence: 2 * pmax - 1
-        assert answer["confidence"] == pytest.approx(2 * p - 1)
+        assert answer["x_confidence"] == pytest.approx(2 * p - 1)
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +521,7 @@ def test_full_lm_head_rows_trimmed():
             },
         )
         assert status == 200
-        assert 0.0 < body["answers"]["q"]["value"] < 1.0
+        assert 0.0 < body["answers"]["q"]["noul"] < 1.0
 
 
 def test_multi_question_batching():
@@ -461,13 +551,10 @@ def test_multi_question_batching():
             },
         )
         assert status == 200
-        assert body["usage"]["questions"] == 3
         assert set(body["answers"]) == {"route", "urgency", "is_flaky"}
         # One prompt per question (per-question isolation), one batch call.
         assert len(backend.calls) == 3
         prompt_texts = [c[0] for c in backend.calls]
-        for prompt in prompt_texts:
-            assert "The failure is a flake." or True
         # each prompt mentions the state and only its own question
         assert "oncall" in prompt_texts[0]
         assert "is a flake" not in prompt_texts[0]
@@ -477,7 +564,9 @@ def test_multi_question_batching():
         for prompt in prompt_texts:
             assert "route" not in prompt  # question ids never appear
         # usage tokens sum the per-prompt token counts
-        assert body["usage"]["prompt_tokens"] > 0
+        assert body["usage"]["input_tokens"] == sum(
+            len(p.split()) for p in prompt_texts
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +584,7 @@ def test_temperature_flattens_distribution(tmp_path):
         status, body = post(url, systemone_url(), simple_payload())
         assert status == 200
         answer = body["answers"]["deploy"]
-        assert answer["temperature"] == 2.0
+        assert answer["x_temperature"] == 2.0
         # T=2 halves the logit gap: softmax([1, 0])
         expected = math.exp(1.0) / (math.exp(1.0) + 1.0)
         assert answer["probabilities"]["deploy"] == pytest.approx(expected)
@@ -531,10 +620,12 @@ def test_per_dataset_temperature_wins():
             },
         )
         assert status == 200
-        assert body["answers"]["with_ds"]["temperature"] == 4.0
-        assert body["answers"]["without_ds"]["temperature"] == 1.0
-        # higher temperature -> flatter distribution
-    assert True
+        assert body["answers"]["with_ds"]["x_temperature"] == 4.0
+        assert body["answers"]["without_ds"]["x_temperature"] == 1.0
+        assert (
+            body["answers"]["with_ds"]["confidence"]
+            < body["answers"]["without_ds"]["confidence"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -545,13 +636,14 @@ def test_per_dataset_temperature_wins():
 def test_404_unknown_path(base_url):
     status, body = get(base_url, "/nope")
     assert status == 404
-    assert body["error"]["code"] == "not_found"
+    assert body["detail"]["error_type"] == "not_found"
+    assert body["detail"]["message"]
 
 
 def test_405_get_on_systemone(base_url):
     status, body = get(base_url, "/v1/systemone")
     assert status == 405
-    assert body["error"]["code"] == "method_not_allowed"
+    assert body["detail"]["error_type"] == "method_not_allowed"
 
 
 def test_post_404(base_url):
@@ -569,7 +661,7 @@ def test_backend_error_500():
     with live_server(backend=ExplodingBackend()) as url:
         status, body = post(url, systemone_url(), simple_payload())
         assert status == 500
-        assert body["error"]["code"] == "backend_error"
+        assert body["detail"] == {"error_type": "backend_error", "message": "boom"}
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +680,12 @@ def test_health(base_url):
 def test_models(base_url):
     status, body = get(base_url, "/v1/models")
     assert status == 200
-    assert body["object"] == "list"
-    assert body["data"][0]["id"] == "deem-test"
-    assert body["data"][0]["object"] == "model"
+    assert body == {
+        "models": [
+            {
+                "name": "deem-test",
+                "description": "Deem typed decision model",
+                "release_date": "",
+            }
+        ]
+    }

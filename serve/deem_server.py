@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Deem `/v1/systemone` server — typed, calibrated decisions over HTTP.
 
-Wire-compatible with the System One API shape (SPEC §2): the official
-``typesafe-sdk`` works drop-in against this endpoint (point it at the server
-with ``TYPESAFE_BASE_URL``, decider-2b's distribution channel).
+Wire-compatible with TypeSafe's ``/v1/systemone`` (Jev) API: the official
+SDKs work against this endpoint given any non-empty API key and the server
+URL as base URL (``TYPESAFE_BASE_URL``).  Questions carry TypeSafe
+``criteria`` (choice: option -> description map, score: ordered level list,
+noul: optional ``{"true", "false"}``); the legacy ``options`` / ``levels``
+lists and list-form ``questions`` are accepted as aliases.  Choice
+descriptions and noul criteria are rendered into the prompt.
+
+Errors: request validation failures are HTTP 422 with a FastAPI-style body
+``{"detail": [{"loc": ["body", ...], "msg": ..., "type": ...}]}``; every other
+error is ``{"detail": {"error_type": ..., "message": ...}}``.
 
 Implementation choice: **stdlib ``http.server`` + threading**.  FastAPI is
 not installed in either project virtualenv (checked ``.venv`` and
@@ -15,7 +23,7 @@ real checkpoint is configured — run it with the torch-enabled interpreter
 
 Primitives (one request, many questions, all against the same state):
 
-* **choice**  — pick from 2–255 options;
+* **choice**  — pick from 2–255 options (the torch readout: at most 26);
 * **score**   — rate against 2–10 ordered levels;
 * **noul**    — probability a proposition is true.
 
@@ -26,7 +34,7 @@ and per-question temperature scaling from a calibration file
 The v6 format (``scripts/sft/calibration_v6.json``) is also accepted:
 per-dataset entries may carry a per-class temperature vector, which is
 applied in preference to the scalar fallback chain (per-dataset scalar,
-then per-primitive, then 1.0); the reported ``temperature`` is the scalar
+then per-primitive, then 1.0); the reported ``x_temperature`` is the scalar
 fallback.
 
 Environment variables (flags override):
@@ -60,8 +68,6 @@ import math
 import os
 import sys
 import threading
-import time
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -78,10 +84,11 @@ if _REPO_ROOT.name:  # pragma: no branch
 
 from deem.format import (  # noqa: E402
     build_prompt,
-    confidence_from_probabilities,
     marginalize_choice,
     marginalize_score,
     read_answers,
+    render_inline,
+    render_text,
 )
 from deem.primitives import (  # noqa: E402
     MAX_LEVELS,
@@ -90,7 +97,6 @@ from deem.primitives import (  # noqa: E402
     NoulQuestion,
     NoulResult,
     QuestionSet,
-    DeemError,
     ScoreQuestion,
 )
 
@@ -107,6 +113,7 @@ __all__ = [
 DEFAULT_MODEL_ID = "deem-1.5"
 DEFAULT_PORT = 8300
 MAX_BODY_BYTES = 8 * 1024 * 1024
+MODEL_DESCRIPTION = "Deem typed decision model"
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +128,15 @@ class RequestError(Exception):
         super().__init__(message)
         self.status = status
         self.code = code
+
+
+class ValidationError(RequestError):
+    """Invalid request field (HTTP 422); ``loc`` is the path to the field,
+    starting with ``"body"``."""
+
+    def __init__(self, loc, message: str, code: str = "value_error"):
+        super().__init__(message, status=422, code=code)
+        self.loc = ["body", *loc]
 
 
 class BackendError(Exception):
@@ -510,76 +526,139 @@ class Calibration:
 QUESTION_TYPES = ("choice", "score", "noul")
 
 
-def _require_str(value, what):
-    if not isinstance(value, str) or not value:
-        raise RequestError(f"{what} must be a non-empty string")
-    return value
+def _string_list(values, loc):
+    if not all(isinstance(v, str) for v in values):
+        raise ValidationError(loc, "entries must be strings")
+    return list(values)
+
+
+def _check_labels(labels, minimum, maximum, loc):
+    if not minimum <= len(labels) <= maximum:
+        raise ValidationError(
+            loc, f"needs {minimum}-{maximum} entries, got {len(labels)}"
+        )
+    seen = set()
+    for label in labels:
+        if not label.strip():
+            raise ValidationError(loc, "entries must be non-empty")
+        if "\r" in label or "\n" in label:
+            raise ValidationError(loc, "entries must not contain newlines")
+        if label in seen:
+            raise ValidationError(loc, f"duplicate entry {label!r}")
+        seen.add(label)
+    return labels
+
+
+def _instructions(qid, spec):
+    value = spec.get("instructions")
+    if value is None:
+        return ""
+    if isinstance(value, (str, dict, list)):
+        return render_text(value)
+    raise ValidationError(
+        ["questions", qid, "instructions"], "must be a string, object or array"
+    )
 
 
 def parse_question(qid, spec):
     """Parse one question spec -> (question object, primitive, dataset)."""
+    loc = ["questions", qid]
     if not isinstance(spec, dict):
-        raise RequestError(f"question {qid!r} must be an object")
+        raise ValidationError(loc, "question must be an object")
     qtype = spec.get("type")
+    if qtype is None:
+        raise ValidationError(loc + ["type"], "field required")
     if qtype not in QUESTION_TYPES:
-        raise RequestError(
-            f"question {qid!r} has invalid type {qtype!r}; "
-            f"expected one of {', '.join(QUESTION_TYPES)}"
+        raise ValidationError(
+            loc + ["type"],
+            f"unknown question type {qtype!r}; "
+            f"expected one of {', '.join(QUESTION_TYPES)}",
         )
-    instructions = spec.get("instructions")
+    instructions = _instructions(qid, spec)
     dataset = spec.get("dataset")
     if dataset is not None and not isinstance(dataset, str):
-        raise RequestError(f"question {qid!r} dataset must be a string")
-    try:
-        if qtype == "choice":
-            options = spec.get("options")
-            if not isinstance(options, list):
-                raise RequestError(f"question {qid!r} needs an options list")
-            question = ChoiceQuestion(
-                instructions=instructions, options=options
+        raise ValidationError(loc + ["dataset"], "must be a string")
+    criteria = spec.get("criteria")
+    at_criteria = loc + ["criteria"]
+    if qtype == "choice":
+        options_alias = spec.get("options")
+        if isinstance(criteria, dict):
+            options = list(criteria)
+            descriptions = list(criteria.values())
+        elif criteria is not None:
+            raise ValidationError(
+                at_criteria, "must map each option to a description"
             )
-        elif qtype == "score":
-            levels = spec.get("levels")
-            if not isinstance(levels, list):
-                raise RequestError(f"question {qid!r} needs a levels list")
-            question = ScoreQuestion(instructions=instructions, levels=levels)
+        elif isinstance(options_alias, list):
+            options = _string_list(options_alias, loc + ["options"])
+            descriptions = None
         else:
-            question = NoulQuestion(instructions=instructions)
-    except (DeemError, TypeError) as exc:
-        raise RequestError(f"question {qid!r}: {exc}") from exc
+            raise ValidationError(at_criteria, "field required")
+        _check_labels(options, 2, MAX_OPTIONS, at_criteria)
+        question = ChoiceQuestion(
+            instructions=instructions, options=options, descriptions=descriptions
+        )
+    elif qtype == "score":
+        levels_alias = spec.get("levels")
+        if isinstance(criteria, list):
+            levels = [render_inline(level) for level in criteria]
+        elif criteria is not None:
+            raise ValidationError(at_criteria, "must be a list of levels")
+        elif isinstance(levels_alias, list):
+            levels = _string_list(levels_alias, loc + ["levels"])
+        else:
+            raise ValidationError(at_criteria, "field required")
+        _check_labels(levels, 2, MAX_LEVELS, at_criteria)
+        question = ScoreQuestion(instructions=instructions, levels=levels)
+    else:
+        if criteria is None:
+            criteria = {}
+        elif not isinstance(criteria, dict):
+            raise ValidationError(
+                at_criteria, "must be an object with 'true' and 'false'"
+            )
+        question = NoulQuestion(
+            instructions=instructions,
+            if_true=criteria.get("true"),
+            if_false=criteria.get("false"),
+        )
     return question, qtype, dataset
 
 
-def parse_questions(payload):
+def parse_questions(payload, max_questions=None):
     """Parse the request `questions` field -> ordered [(qid, question, type, dataset)]."""
     questions = payload.get("questions", None)
-    if questions is None or (
-        isinstance(questions, dict) and not questions
-    ):
-        raise RequestError("'questions' must contain at least one question")
+    if questions is None:
+        raise ValidationError(["questions"], "field required")
     if isinstance(questions, dict):
         items = list(questions.items())
     elif isinstance(questions, list):
         items = []
         for spec in questions:
-            if not isinstance(spec, dict):
-                raise RequestError("question entries must be objects")
-            qid = spec.get("id", spec.get("qid"))
-            if qid is None:
-                raise RequestError("list-form questions need an 'id' field")
+            qid = spec.get("id", spec.get("qid")) if isinstance(spec, dict) else None
+            if not isinstance(qid, str):
+                raise ValidationError(
+                    ["questions"], "list-form questions need an 'id' field"
+                )
             items.append((qid, spec))
     else:
-        raise RequestError("'questions' must be an object or a list")
+        raise ValidationError(["questions"], "must be an object or a list")
+    if not items:
+        raise ValidationError(["questions"], "must contain at least one question")
+    if max_questions is not None and len(items) > max_questions:
+        raise ValidationError(
+            ["questions"], f"at most {max_questions} questions per request"
+        )
     default_dataset = payload.get("dataset")
     if default_dataset is not None and not isinstance(default_dataset, str):
-        raise RequestError("'dataset' must be a string")
+        raise ValidationError(["dataset"], "must be a string")
     parsed = []
     seen = set()
     for qid, spec in items:
-        if not isinstance(qid, str) or not qid:
-            raise RequestError("question ids must be non-empty strings")
+        if not qid:
+            raise ValidationError(["questions"], "question ids must be non-empty")
         if qid in seen:
-            raise RequestError(f"duplicate question id {qid!r}")
+            raise ValidationError(["questions"], f"duplicate question id {qid!r}")
         seen.add(qid)
         question, qtype, dataset = parse_question(qid, spec)
         parsed.append((qid, question, qtype, dataset or default_dataset))
@@ -592,22 +671,26 @@ def parse_questions(payload):
 
 
 def _serialize_answer(result, qtype, temperature):
+    """TypeSafe answer shape; fields outside the spec carry an ``x_`` prefix."""
     if qtype == "choice":
         return {
             "type": "choice",
             "choice": result.choice,
             "probabilities": dict(result.probabilities),
             "confidence": result.confidence,
-            "temperature": temperature,
+            "x_temperature": temperature,
         }
     if qtype == "score":
+        levels = list(result.probabilities)
         return {
             "type": "score",
-            "level": result.level,
-            "probabilities": dict(result.probabilities),
-            "expected": result.expected,
+            "score": result.expected,
+            "legend": {str(i): level for i, level in enumerate(levels)},
+            "probabilities": {
+                str(i): result.probabilities[level] for i, level in enumerate(levels)
+            },
             "confidence": result.confidence,
-            "temperature": temperature,
+            "x_temperature": temperature,
         }
     value = float(result.value)
     # Confidence for noul: the same derived formula applied to the binary
@@ -615,9 +698,9 @@ def _serialize_answer(result, qtype, temperature):
     confidence = 2.0 * max(value, 1.0 - value) - 1.0
     return {
         "type": "noul",
-        "value": value,
-        "confidence": confidence,
-        "temperature": temperature,
+        "noul": value,
+        "x_confidence": confidence,
+        "x_temperature": temperature,
     }
 
 
@@ -651,12 +734,17 @@ class DeemCore:
         from deem.format import permute_question
 
         parsed = parse_questions(
-            {"questions": questions_payload, "dataset": default_dataset}
+            {"questions": questions_payload, "dataset": default_dataset},
+            max_questions=self.max_questions,
         )
-        if len(parsed) > self.max_questions:
-            raise RequestError(
-                f"request exceeds the {self.max_questions}-question cap"
-            )
+        max_letters = getattr(self.backend, "max_letters", MAX_OPTIONS)
+        for qid, question, qtype, _ in parsed:
+            n = len(getattr(question, "options", None) or getattr(question, "levels", ()))
+            if n > max_letters:
+                raise ValidationError(
+                    ["questions", qid, "criteria"],
+                    f"this model supports at most {max_letters} options",
+                )
         # One prompt per (question, order) — per-question isolation, with
         # choice questions repeated under n_orders option orderings.
         order_perms = []  # per question: list of perms (None = identity)
@@ -761,12 +849,7 @@ class DeemCore:
             answers[qid] = _serialize_answer(result, qtype, temperature)
         return {
             "answers": answers,
-            "usage": {
-                "prompt_tokens": total_tokens,
-                "completion_tokens": 0,
-                "total_tokens": total_tokens,
-                "questions": len(parsed),
-            },
+            "usage": {"input_tokens": total_tokens, "output_tokens": 0},
         }
 
     def health(self):
@@ -814,8 +897,13 @@ class DeemHandler(BaseHTTPRequestHandler):
 
     def _send_error(self, status, message, code="error"):
         self._send_json(
-            status,
-            {"error": {"message": message, "type": code, "code": code}},
+            status, {"detail": {"error_type": code, "message": message}}
+        )
+
+    def _send_validation_error(self, exc):
+        self._send_json(
+            422,
+            {"detail": [{"loc": exc.loc, "msg": str(exc), "type": exc.code}]},
         )
 
     def _read_body(self):
@@ -827,7 +915,9 @@ class DeemHandler(BaseHTTPRequestHandler):
         except ValueError:
             raise RequestError("invalid Content-Length") from None
         if length > MAX_BODY_BYTES:
-            raise RequestError("request body too large", 413, "body_too_large")
+            # the unread body must not be parsed as the next request
+            self.close_connection = True
+            raise RequestError("request body too large", 413, "request_too_large")
         return self.rfile.read(length)
 
     # -- routing ---------------------------------------------------------
@@ -848,15 +938,13 @@ class DeemHandler(BaseHTTPRequestHandler):
             self._send_json(
                 200,
                 {
-                    "object": "list",
-                    "data": [
+                    "models": [
                         {
-                            "id": self.core.model_id,
-                            "object": "model",
-                            "created": 0,
-                            "owned_by": "deem",
+                            "name": self.core.model_id,
+                            "description": MODEL_DESCRIPTION,
+                            "release_date": "",
                         }
-                    ],
+                    ]
                 },
             )
         elif path == "/v1/systemone":
@@ -873,29 +961,25 @@ class DeemHandler(BaseHTTPRequestHandler):
             raw = self._read_body()
             try:
                 payload = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise RequestError(f"invalid JSON body: {exc}") from None
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValidationError(
+                    [], f"invalid JSON: {exc}", code="json_invalid"
+                ) from None
             if not isinstance(payload, dict):
-                raise RequestError("request body must be a JSON object")
-            state = payload.get("state", None)
+                raise ValidationError([], "request body must be a JSON object")
             if "state" not in payload:
-                raise RequestError("'state' is required")
-            try:
-                json.dumps(state)
-            except (TypeError, ValueError):
-                raise RequestError("'state' must be JSON-serializable") from None
+                raise ValidationError(["state"], "field required")
             result = self.core.decide(
-                state, payload.get("questions"), payload.get("dataset")
+                payload["state"], payload.get("questions"), payload.get("dataset")
             )
             response = {
-                "id": f"deem-{uuid.uuid4().hex[:24]}",
-                "object": "systemone.completion",
-                "created": int(time.time()),
                 "model": self.core.model_id,
                 "answers": result["answers"],
                 "usage": result["usage"],
             }
             self._send_json(200, response)
+        except ValidationError as exc:
+            self._send_validation_error(exc)
         except RequestError as exc:
             self._send_error(exc.status, str(exc), exc.code)
         except BackendError as exc:

@@ -81,7 +81,8 @@ def test_score_call():
     )
     answer = tool_payload(response)
     assert answer["type"] == "score"
-    assert answer["expected"] == pytest.approx(0.5)
+    assert answer["score"] == pytest.approx(0.5)
+    assert answer["legend"] == {"0": "warm", "1": "cold"}
     assert answer["confidence"] == pytest.approx(0.0)
 
 
@@ -94,8 +95,8 @@ def test_check_call():
     )
     answer = tool_payload(response)
     assert answer["type"] == "noul"
-    assert answer["value"] > 0.5
-    assert 0 < answer["confidence"] < 1
+    assert answer["noul"] > 0.5
+    assert 0 < answer["x_confidence"] < 1
 
 
 def test_unknown_tool_is_error():
@@ -191,7 +192,7 @@ def test_stdio_roundtrip():
             responses[-1]["result"]["content"][0]["text"]
         )
         assert answer["type"] == "noul"
-        assert answer["value"] == pytest.approx(0.5)  # uniform stub
+        assert answer["noul"] == pytest.approx(0.5)  # uniform stub
     finally:
         proc.stdin.close()
         proc.wait(timeout=30)

@@ -104,7 +104,8 @@ TOOLS = [
         "name": "score",
         "description": (
             "Rate the state against 2-10 ordered descriptive levels. "
-            "Returns the level, level distribution, expected score and "
+            "Returns the expected 0-based level index (score), the "
+            "index -> level legend, the index-keyed distribution and "
             "confidence."
         ),
         "inputSchema": SCORE_SCHEMA,
@@ -113,7 +114,8 @@ TOOLS = [
         "name": "check",
         "description": (
             "Probability that a proposition about the state is true. "
-            "Returns a value in [0, 1] plus derived confidence."
+            "Returns noul, a probability in [0, 1], plus derived "
+            "x_confidence."
         ),
         "inputSchema": CHECK_SCHEMA,
     },
