@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JEVCOMPAT: jevcompat==0.1.0
+  DEEM_08B_REVISION: 8cbabbb2c4a7ef13c6b43f0ef3ae4157983c6d21
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uvx ruff check .
+      - run: uvx ruff format --check .
+      - run: uv venv && uv pip install -e . pytest
+      # TestShippedEntries reads result files that are not in the repo.
+      - run: >-
+          .venv/bin/python -m pytest -q
+          --deselect eval/tare/tests/test_leaderboard.py::TestShippedEntries
+
+  python-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv venv && uv pip install -e .
+      - name: Start stub server
+        run: |
+          DEEM_PORT=8300 nohup .venv/bin/python serve/deem_server.py > server.log 2>&1 &
+          for _ in $(seq 60); do curl -sf localhost:8300/health && exit 0; sleep 1; done
+          cat server.log; exit 1
+      - run: uvx "$JEVCOMPAT" test http://127.0.0.1:8300 --json jevcompat.json
+        continue-on-error: true
+      - run: python3 .github/scripts/check_jevcompat.py jevcompat.json
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --check
+      - run: cargo build --release --bins
+      - run: cargo test --release --lib
+      # The integration tests exercise the AVX-512 kernels directly.
+      - name: Integration tests (AVX-512 runners only)
+        run: |
+          if grep -qw avx512f /proc/cpuinfo; then
+            cargo test --release --tests
+          else
+            echo "::notice::runner has no AVX-512; integration tests skipped"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deem-server
+          path: rust/target/release/deem-server
+          retention-days: 1
+
+  rust-conformance:
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: deem-server
+      - uses: actions/cache@v6
+        with:
+          path: ckpt
+          key: deem-0.8-v1-${{ env.DEEM_08B_REVISION }}
+      - name: Fetch deem-0.8-v1
+        run: |
+          mkdir -p ckpt
+          for f in config.json generation_config.json tokenizer.json tokenizer_config.json model.safetensors; do
+            [ -s "ckpt/$f" ] || curl -sfL -o "ckpt/$f" \
+              "https://huggingface.co/LibertAIDAI/deem-0.8-v1/resolve/$DEEM_08B_REVISION/$f"
+          done
+      - name: Start deem-server
+        run: |
+          chmod +x deem-server
+          DEEM_CHECKPOINT=ckpt DEEM_PORT=8300 \
+          DEEM_CALIBRATION=serve/calibration/calibration_v13.json DEEM_CALIBRATION_KEY=v13 \
+            nohup ./deem-server > server.log 2>&1 &
+          for _ in $(seq 180); do curl -sf localhost:8300/health && exit 0; sleep 1; done
+          cat server.log; exit 1
+      - run: uvx "$JEVCOMPAT" test http://127.0.0.1:8300 --json jevcompat.json --timeout 300
+        continue-on-error: true
+      # choice.options: the letter-slot readout scores at most 26 options.
+      - run: python3 .github/scripts/check_jevcompat.py jevcompat.json --allow choice.options
+      - if: failure()
+        run: cat server.log
