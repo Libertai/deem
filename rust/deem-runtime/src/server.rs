@@ -1,10 +1,17 @@
 //! `/v1/systemone` HTTP server — wire-compatible with `serve/deem_server.py`.
 
-use crate::format::{build_prompt, read_answers_with_temps, Answer, Question, QuestionSet};
+use crate::format::{
+    build_prompt, read_answers_with_temps, render_inline, render_text, Answer, Question,
+    QuestionSet, MAX_OPTIONS,
+};
 use crate::readout::Readout;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::Arc;
+
+const MAX_LEVELS: usize = 10;
+const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_QUESTIONS: usize = 64;
 
 pub struct Calibration {
     per_primitive: std::collections::HashMap<String, f32>,
@@ -71,13 +78,35 @@ struct ParsedQuestion {
     qtype: String,
 }
 
-fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
-    let state = body.get("state").ok_or("missing state")?.clone();
-    let questions_value = body.get("questions").ok_or("missing questions")?;
+/// A request validation failure; `loc` is the path to the offending field,
+/// starting with "body".
+#[derive(Debug)]
+struct Invalid {
+    loc: Vec<String>,
+    msg: String,
+}
+
+fn invalid(loc: &[&str], msg: impl Into<String>) -> Invalid {
+    let mut path = vec!["body".to_string()];
+    path.extend(loc.iter().map(|s| s.to_string()));
+    Invalid {
+        loc: path,
+        msg: msg.into(),
+    }
+}
+
+fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), Invalid> {
+    let state = body
+        .get("state")
+        .ok_or_else(|| invalid(&["state"], "field required"))?
+        .clone();
+    let questions_value = body
+        .get("questions")
+        .ok_or_else(|| invalid(&["questions"], "field required"))?;
     // Both wire forms, matching parse_questions in serve/deem_server.py:
     let questions: Vec<(String, &Value)> = if let Some(obj) = questions_value.as_object() {
         if obj.is_empty() {
-            return Err("'questions' must contain at least one question".to_string());
+            return Err(invalid(&["questions"], "must contain at least one question"));
         }
         obj.iter().map(|(k, v)| (k.clone(), v)).collect()
     } else if let Some(arr) = questions_value.as_array() {
@@ -87,13 +116,19 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
                 .get("id")
                 .or_else(|| q.get("qid"))
                 .and_then(|v| v.as_str())
-                .ok_or("list-form questions need an 'id' field")?;
+                .ok_or_else(|| invalid(&["questions"], "list-form questions need an 'id' field"))?;
             items.push((qid.to_string(), q));
         }
         items
     } else {
-        return Err("'questions' must be an object or a list".to_string());
+        return Err(invalid(&["questions"], "must be an object or a list"));
     };
+    if questions.len() > MAX_QUESTIONS {
+        return Err(invalid(
+            &["questions"],
+            format!("at most {MAX_QUESTIONS} questions per request"),
+        ));
+    }
 
     let top_dataset = body
         .get("dataset")
@@ -102,58 +137,94 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
 
     let mut parsed = Vec::new();
     for (qid, q) in questions {
+        let at = |field: &str, msg: String| invalid(&["questions", &qid, field], msg);
         let qtype = q
             .get("type")
             .and_then(|t| t.as_str())
-            .ok_or(format!("question {qid}: missing type"))?
+            .ok_or_else(|| at("type", "field required".into()))?
             .to_string();
-        let instructions = q
-            .get("instructions")
-            .and_then(|t| t.as_str())
-            .ok_or(format!("question {qid}: missing instructions"))?
-            .to_string();
+        let instructions = match q.get("instructions") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(s)) => s.clone(),
+            Some(v @ (Value::Object(_) | Value::Array(_))) => render_text(v),
+            Some(_) => {
+                return Err(at(
+                    "instructions",
+                    "must be a string, object or array".into(),
+                ))
+            }
+        };
         let dataset = q
             .get("dataset")
             .and_then(|d| d.as_str())
-            .or_else(|| top_dataset.as_deref())
+            .or(top_dataset.as_deref())
             .map(|s| s.to_string());
+        let criteria = q.get("criteria").filter(|c| !c.is_null());
 
         let question = match qtype.as_str() {
             "choice" => {
-                let options: Vec<String> = q
-                    .get("options")
-                    .and_then(|o| o.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .ok_or(format!("question {qid}: missing options"))?;
-                if options.len() < 2 || options.len() > 255 {
-                    return Err(format!("question {qid}: choice needs 2-255 options"));
+                let (options, descriptions): (Vec<String>, Vec<Option<String>>) =
+                    match (criteria, q.get("options")) {
+                        (Some(Value::Object(map)), _) => map
+                            .iter()
+                            .map(|(k, v)| (k.clone(), (!v.is_null()).then(|| render_inline(v))))
+                            .unzip(),
+                        (Some(_), _) => {
+                            return Err(at(
+                                "criteria",
+                                "must map each option to a description".into(),
+                            ))
+                        }
+                        (None, Some(Value::Array(items))) => {
+                            let options = string_list(items).map_err(|m| at("options", m))?;
+                            let descriptions = vec![None; options.len()];
+                            (options, descriptions)
+                        }
+                        (None, _) => return Err(at("criteria", "field required".into())),
+                    };
+                check_labels(&options, 2, MAX_OPTIONS).map_err(|m| at("criteria", m))?;
+                Question::Choice {
+                    instructions,
+                    options,
+                    descriptions,
                 }
-                if q.get("dataset").is_none() && top_dataset.is_some() {
-                    // dataset applies to questions lacking their own
-                }
-                Question::Choice { instructions, options }
             }
             "score" => {
-                let levels: Vec<String> = q
-                    .get("levels")
-                    .and_then(|o| o.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .ok_or(format!("question {qid}: missing levels"))?;
-                if levels.len() < 2 || levels.len() > 10 {
-                    return Err(format!("question {qid}: score needs 2-10 levels"));
+                let levels: Vec<String> = match (criteria, q.get("levels")) {
+                    (Some(Value::Array(items)), _) => items.iter().map(render_inline).collect(),
+                    (Some(_), _) => return Err(at("criteria", "must be a list of levels".into())),
+                    (None, Some(Value::Array(items))) => {
+                        string_list(items).map_err(|m| at("levels", m))?
+                    }
+                    (None, _) => return Err(at("criteria", "field required".into())),
+                };
+                check_labels(&levels, 2, MAX_LEVELS).map_err(|m| at("criteria", m))?;
+                Question::Score {
+                    instructions,
+                    levels,
                 }
-                Question::Score { instructions, levels }
             }
-            "noul" => Question::Noul { instructions },
-            other => return Err(format!("question {qid}: unknown type {other}")),
+            "noul" => {
+                let (if_true, if_false) = match criteria {
+                    None => (None, None),
+                    Some(Value::Object(map)) => {
+                        let side = |key: &str| map.get(key).filter(|v| !v.is_null()).map(render_inline);
+                        (side("true"), side("false"))
+                    }
+                    Some(_) => {
+                        return Err(at(
+                            "criteria",
+                            "must be an object with 'true' and 'false'".into(),
+                        ))
+                    }
+                };
+                Question::Noul {
+                    instructions,
+                    if_true,
+                    if_false,
+                }
+            }
+            other => return Err(at("type", format!("unknown question type {other:?}"))),
         };
         parsed.push(ParsedQuestion {
             question,
@@ -163,6 +234,36 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), String> {
         });
     }
     Ok((state, parsed))
+}
+
+fn string_list(items: &[Value]) -> Result<Vec<String>, String> {
+    items
+        .iter()
+        .map(|x| {
+            x.as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| "entries must be strings".to_string())
+        })
+        .collect()
+}
+
+fn check_labels(labels: &[String], min: usize, max: usize) -> Result<(), String> {
+    if labels.len() < min || labels.len() > max {
+        return Err(format!("needs {min}-{max} entries, got {}", labels.len()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for label in labels {
+        if label.trim().is_empty() {
+            return Err("entries must be non-empty".to_string());
+        }
+        if label.contains(['\r', '\n']) {
+            return Err("entries must not contain newlines".to_string());
+        }
+        if !seen.insert(label) {
+            return Err(format!("duplicate entry {label:?}"));
+        }
+    }
+    Ok(())
 }
 
 pub fn run(
@@ -190,11 +291,30 @@ pub fn run(
     unreachable!()
 }
 
-fn error_body(message: &str, typ: &str, code: u16) -> String {
-    serde_json::to_string(&json!({
-        "error": {"message": message, "type": typ, "code": code}
-    }))
-    .unwrap()
+type HttpResponse = tiny_http::Response<std::io::Cursor<Vec<u8>>>;
+
+fn json_response(body: &Value, code: u16) -> HttpResponse {
+    let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+        .expect("static header");
+    tiny_http::Response::from_string(serde_json::to_string(body).unwrap())
+        .with_status_code(code)
+        .with_header(header)
+}
+
+/// TypeSafe error body for non-validation failures.
+fn error_response(message: &str, error_type: &str, code: u16) -> HttpResponse {
+    json_response(
+        &json!({"detail": {"error_type": error_type, "message": message}}),
+        code,
+    )
+}
+
+/// TypeSafe (FastAPI-style) validation error body, status 422.
+fn validation_response(err: &Invalid, error_type: &str) -> HttpResponse {
+    json_response(
+        &json!({"detail": [{"loc": err.loc, "msg": err.msg, "type": error_type}]}),
+        422,
+    )
 }
 
 fn handle_request(
@@ -202,69 +322,72 @@ fn handle_request(
     request: &mut tiny_http::Request,
     model_id: &str,
     calibration: &Option<Calibration>,
-) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+) -> HttpResponse {
     let method = request.method().clone();
     let url = request.url().to_string();
 
     if method == tiny_http::Method::Get && url.starts_with("/v1/models") {
-        return tiny_http::Response::from_string(
-            serde_json::to_string(&json!({
-                "object": "list",
-                "data": [{"id": model_id, "object": "model", "created": 0,
-                          "owned_by": "deem"}],
-            }))
-            .unwrap(),
+        return json_response(
+            &json!({"models": [{"name": model_id,
+                                "description": "Deem typed decision model",
+                                "release_date": ""}]}),
+            200,
         );
     }
     if method == tiny_http::Method::Get && url.starts_with("/health") {
-        return tiny_http::Response::from_string(
-            serde_json::to_string(&json!({
-                "status": "ok", "model": model_id, "backend": "rust",
-            }))
-            .unwrap(),
+        return json_response(
+            &json!({"status": "ok", "model": model_id, "backend": "rust"}),
+            200,
         );
     }
     if method == tiny_http::Method::Post && url.starts_with("/v1/systemone") {
-        let mut body = String::new();
-        if request.as_reader().read_to_string(&mut body).is_err() {
-            return tiny_http::Response::from_string(error_body(
-                "read error",
-                "invalid_request_error",
-                400,
-            ))
-            .with_status_code(400);
+        if request
+            .body_length()
+            .is_some_and(|n| n as u64 > MAX_BODY_BYTES)
+        {
+            return error_response("request body too large", "request_too_large", 413);
         }
-        match complete(readout, &body, model_id, calibration) {
-            Ok(text) => tiny_http::Response::from_string(text),
-            Err((code, msg)) => {
-                tiny_http::Response::from_string(error_body(&msg, "invalid_request_error", code))
-                    .with_status_code(code)
+        let mut body = Vec::new();
+        let mut reader = request.as_reader().take(MAX_BODY_BYTES + 1);
+        if reader.read_to_end(&mut body).is_err() {
+            return error_response("could not read request body", "invalid_request_error", 400);
+        }
+        if body.len() as u64 > MAX_BODY_BYTES {
+            return error_response("request body too large", "request_too_large", 413);
+        }
+        let payload: Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = invalid(&[], format!("invalid JSON: {e}"));
+                return validation_response(&err, "json_invalid");
             }
+        };
+        match complete(readout, &payload, model_id, calibration) {
+            Ok(value) => json_response(&value, 200),
+            Err(err) => validation_response(&err, "value_error"),
         }
     } else {
-        tiny_http::Response::from_string(error_body(
-            "not found",
-            "not_found",
-            404,
-        ))
-        .with_status_code(404)
+        error_response("not found", "not_found", 404)
     }
 }
 
 fn complete(
     readout: &Arc<Readout>,
-    body: &str,
+    payload: &Value,
     model_id: &str,
     calibration: &Option<Calibration>,
-) -> Result<String, (u16, String)> {
-    let payload: Value = serde_json::from_str(body)
-        .map_err(|e| (400u16, format!("invalid JSON: {e}")))?;
-    let (state, questions) = parse_request(&payload).map_err(|e| (400, e))?;
-    if questions.is_empty() {
-        return Err((400, "no questions".to_string()));
-    }
-    if questions.len() > 64 {
-        return Err((400, "too many questions (max 64)".to_string()));
+) -> Result<Value, Invalid> {
+    let (state, questions) = parse_request(payload)?;
+    // The readout scores single-token letters only; more options than
+    // letters would silently drop the tail.
+    let max_letters = readout.tokenizer.letter_ids.len();
+    for q in &questions {
+        if q.question.n_valid() > max_letters {
+            return Err(invalid(
+                &["questions", &q.qid, "criteria"],
+                format!("this model supports at most {max_letters} options"),
+            ));
+        }
     }
 
     // per-question isolation: one row per question
@@ -305,26 +428,21 @@ fn complete(
 
     let mut out = serde_json::Map::new();
     for (i, (qid, ans)) in answers.iter().enumerate() {
-        out.insert(qid.clone(), answer_json(ans, temperatures[i]));
+        out.insert(
+            qid.clone(),
+            answer_json(ans, &questions[i].question, temperatures[i]),
+        );
     }
 
-    let created = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok(serde_json::to_string(&json!({
-        "id": format!("deem-{:032x}", created),
-        "object": "systemone.completion",
-        "created": created,
+    Ok(json!({
         "model": model_id,
         "answers": out,
-        "usage": {"prompt_tokens": total_tokens, "completion_tokens": 0,
-                  "total_tokens": total_tokens, "questions": questions.len()},
+        "usage": {"input_tokens": total_tokens, "output_tokens": 0},
     }))
-    .unwrap())
 }
 
-fn answer_json(ans: &Answer, temperature: f32) -> Value {
+/// TypeSafe answer shape; fields outside the spec carry an `x_` prefix.
+fn answer_json(ans: &Answer, question: &Question, temperature: f32) -> Value {
     match ans {
         Answer::Choice {
             choice,
@@ -339,37 +457,46 @@ fn answer_json(ans: &Answer, temperature: f32) -> Value {
                 "type": "choice", "choice": choice,
                 "probabilities": probs,
                 "confidence": round5(*confidence),
-                "temperature": temperature,
+                "x_temperature": temperature,
             })
         }
         Answer::Score {
-            level,
             probabilities,
             expected,
             confidence,
+            ..
         } => {
+            let levels = question.labels().unwrap_or_default();
+            let legend: serde_json::Map<String, Value> = levels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (i.to_string(), json!(l)))
+                .collect();
             let probs: serde_json::Map<String, Value> = probabilities
                 .iter()
-                .map(|(k, v)| (k.clone(), json!(round5(*v))))
+                .enumerate()
+                .map(|(i, (_, v))| (i.to_string(), json!(round5(*v))))
                 .collect();
             json!({
-                "type": "score", "level": level,
+                "type": "score",
+                "score": round5(*expected),
+                "legend": legend,
                 "probabilities": probs,
-                "expected": round5(*expected),
                 "confidence": round5(*confidence),
-                "temperature": temperature,
+                "x_temperature": temperature,
             })
         }
         Answer::Noul { value, confidence } => json!({
-            "type": "noul", "value": round5(*value),
-            "confidence": round5(*confidence),
-            "temperature": temperature,
+            "type": "noul",
+            "noul": round5(*value),
+            "x_confidence": round5(*confidence),
+            "x_temperature": temperature,
         }),
     }
 }
 
-fn round5(v: f32) -> f32 {
-    (v * 100000.0).round() / 100000.0
+fn round5(v: f32) -> f64 {
+    (v as f64 * 100000.0).round() / 100000.0
 }
 
 #[cfg(test)]
@@ -423,5 +550,124 @@ mod tests {
     fn parse_request_rejects_scalar_questions() {
         let body = json!({"state": "s", "questions": "all of them"});
         assert!(parse_request(&body).is_err());
+    }
+
+    #[test]
+    fn parse_request_typesafe_criteria() {
+        let body: Value = serde_json::from_str(
+            r#"{
+                "model": "jev-latest",
+                "state": "Help! My payouts have been failing for 3 days.",
+                "questions": {
+                    "urgent": {"type": "noul", "instructions": "Urgent?",
+                               "criteria": {"true": "Time-sensitive", "false": "No urgency"}},
+                    "team": {"type": "choice", "instructions": {"question": "Which team?"},
+                             "criteria": {"technical": "Bugs", "billing": null, "sales": {"x": 1}}},
+                    "mood": {"type": "score", "instructions": "Mood?",
+                             "criteria": ["Calm", "Frustrated", "Very angry"]}
+                }
+            }"#,
+        )
+        .unwrap();
+        let (_, questions) = parse_request(&body).unwrap();
+        let ids: Vec<&str> = questions.iter().map(|q| q.qid.as_str()).collect();
+        assert_eq!(ids, ["urgent", "team", "mood"]);
+        match &questions[0].question {
+            Question::Noul {
+                if_true, if_false, ..
+            } => {
+                assert_eq!(if_true.as_deref(), Some("Time-sensitive"));
+                assert_eq!(if_false.as_deref(), Some("No urgency"));
+            }
+            other => panic!("expected noul, got {other:?}"),
+        }
+        match &questions[1].question {
+            Question::Choice {
+                instructions,
+                options,
+                descriptions,
+            } => {
+                assert_eq!(instructions, r#"{"question":"Which team?"}"#);
+                assert_eq!(options, &["technical", "billing", "sales"]);
+                assert_eq!(
+                    descriptions,
+                    &[
+                        Some("Bugs".to_string()),
+                        None,
+                        Some(r#"{"x":1}"#.to_string())
+                    ]
+                );
+            }
+            other => panic!("expected choice, got {other:?}"),
+        }
+        match &questions[2].question {
+            Question::Score { levels, .. } => {
+                assert_eq!(levels, &["Calm", "Frustrated", "Very angry"])
+            }
+            other => panic!("expected score, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_request_rejects_bad_criteria() {
+        for criteria in [json!(["a", "b"]), json!({"only": null})] {
+            let body = json!({"state": "s", "questions": {
+                "q": {"type": "choice", "instructions": "pick", "criteria": criteria}}});
+            assert!(parse_request(&body).is_err());
+        }
+        let body = json!({"state": "s", "questions": {
+            "q": {"type": "score", "instructions": "rate", "criteria": ["a", "a"]}}});
+        assert!(parse_request(&body).is_err());
+        let body = json!({"state": "s", "questions": {"q": {"type": "boolean"}}});
+        let Err(err) = parse_request(&body) else {
+            panic!("unknown type accepted")
+        };
+        assert_eq!(err.loc, ["body", "questions", "q", "type"]);
+    }
+
+    #[test]
+    fn parse_request_noul_without_instructions() {
+        let body = json!({"state": "s", "questions": {
+            "q": {"type": "noul", "criteria": {"true": "yes", "false": "no"}}}});
+        let (_, questions) = parse_request(&body).unwrap();
+        assert!(matches!(&questions[0].question,
+            Question::Noul { instructions, .. } if instructions.is_empty()));
+    }
+
+    #[test]
+    fn answer_json_typesafe_shapes() {
+        let score_q = Question::Score {
+            instructions: "Mood?".into(),
+            levels: vec!["Calm".into(), "Angry".into()],
+        };
+        let score = answer_json(
+            &Answer::Score {
+                level: "Angry".into(),
+                probabilities: vec![("Calm".into(), 0.25), ("Angry".into(), 0.75)],
+                expected: 0.75,
+                confidence: 0.5,
+            },
+            &score_q,
+            1.0,
+        );
+        assert_eq!(score["score"], json!(0.75));
+        assert_eq!(score["legend"], json!({"0": "Calm", "1": "Angry"}));
+        assert_eq!(score["probabilities"], json!({"0": 0.25, "1": 0.75}));
+
+        let noul_q = Question::Noul {
+            instructions: "?".into(),
+            if_true: None,
+            if_false: None,
+        };
+        let noul = answer_json(
+            &Answer::Noul {
+                value: 0.9,
+                confidence: 0.8,
+            },
+            &noul_q,
+            1.0,
+        );
+        assert_eq!(noul["type"], json!("noul"));
+        assert_eq!(noul["noul"], json!(0.9));
     }
 }
