@@ -37,7 +37,11 @@ runtime.
   (`vpdpbusd`) GEMM lanes, ~3.4 TFLOPs/s isolated int8
 - **Parity-gated against torch:** max letter-logit diff 0.085
   (bf16 noise floor)
-- **Wire-compatible `/v1/systemone`** — drop-in for the TypeSafe SDK
+- **Wire-compatible `/v1/systemone`** — TypeSafe request/response shapes
+  (`criteria`, `noul` / `score` + `legend`, 422 errors); the official
+  TypeSafe SDKs work with any non-empty `api_key` and `base_url` /
+  `TYPESAFE_BASE_URL` pointing at the server. At most 26 options per
+  choice question (TypeSafe allows 255)
 
 ```bash
 git clone https://github.com/Libertai/deem && cd deem/rust

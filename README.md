@@ -30,17 +30,27 @@ curl -s localhost:8300/v1/systemone -d '{
   "questions": {"deploy": {
     "type": "choice",
     "instructions": "Deploy now or wait?",
-    "options": ["deploy", "wait"]}}}'
+    "criteria": {"deploy": "Ship the build now", "wait": null}}}}'
 ```
 
 ```json
-{"answers": {"deploy": {
+{"model": "deem-1.5",
+ "answers": {"deploy": {
   "type": "choice", "choice": "wait",
-  "confidence": 0.82,
-  "probabilities": {"deploy": 0.18, "wait": 0.82}}}}
+  "probabilities": {"deploy": 0.18, "wait": 0.82},
+  "confidence": 0.64, "x_temperature": 1.0}},
+ "usage": {"input_tokens": 41, "output_tokens": 0}}
 ```
 
-Wire-compatible with the TypeSafe SDK shape (`/v1/systemone`).
+Wire-compatible with TypeSafe's `/v1/systemone` (Jev) API: `criteria`
+per question (choice: option → description, score: ordered levels,
+noul: optional `{"true", "false"}`), TypeSafe answer / usage / models /
+422 error shapes. The official TypeSafe SDKs work against it with any
+non-empty `api_key` and `base_url` (or `TYPESAFE_BASE_URL`) set to the
+server. Choice descriptions and noul criteria are rendered into the
+prompt. The current letter readout scores at most 26 options per choice
+question (TypeSafe allows 255); larger questions get a 422. See
+[`serve/README.md`](serve/README.md) for the full contract.
 
 ## Quickstart (CPU, 0.8B)
 
