@@ -16,4 +16,4 @@ dev = ["pytest>=7"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "serve/tests", "eval"]

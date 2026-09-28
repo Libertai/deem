@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from conftest import FixedBackend
+from serve_helpers import FixedBackend
 from deem_server import BackendError, Calibration
 
 
@@ -93,7 +93,7 @@ def test_flat_dict_values_with_temperature_key():
 
 
 def _two_option_request(base_url):
-    from conftest import post
+    from serve_helpers import post
 
     return post(
         base_url,
@@ -114,7 +114,7 @@ def _two_option_request(base_url):
 def test_calibration_end_to_end_temperature(tmp_path):
     """Per-primitive temperature flows through the whole server stack."""
     import json
-    from conftest import live_server
+    from serve_helpers import live_server
 
     cal_path = tmp_path / "calib.json"
     cal_path.write_text(json.dumps({"per_primitive": {"choice": 2.0}}))
@@ -181,7 +181,7 @@ def test_v6_per_class_temperatures_loaded():
 
 def test_v6_per_class_application_end_to_end():
     """Per-class temperatures scale each logit by its own temperature."""
-    from conftest import live_server, post
+    from serve_helpers import live_server, post
 
     cal = Calibration.from_dict(V6_FILE, key="v6")
     backend = FixedBackend(fn=lambda p, n: [3.0, 2.0, 1.0])
@@ -204,7 +204,7 @@ def test_v6_per_class_application_end_to_end():
 
 def test_v6_fallback_chain():
     """per-class -> per-dataset scalar -> per-primitive -> 1.0."""
-    from conftest import live_server, post
+    from serve_helpers import live_server, post
 
     data = {
         "per_primitive": {"choice": 2.5, "noul": 4.0},
