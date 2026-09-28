@@ -77,7 +77,6 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -221,9 +220,7 @@ def _adapt_temperature(spec: dict, repo_root: Path) -> tuple[dict, dict]:
     sub = _subkey(data, spec)
     per = sub.get("per_dataset")
     if not isinstance(per, dict) or not per:
-        raise LeaderboardError(
-            f"no per_dataset table in {path} [{spec.get('key')}]"
-        )
+        raise LeaderboardError(f"no per_dataset table in {path} [{spec.get('key')}]")
     ece = _mean(d.get("ece_after") for d in per.values())
     if ece is None:
         raise LeaderboardError(f"no ece_after in {path} [{spec.get('key')}]")
@@ -234,9 +231,9 @@ def _adapt_temperature(spec: dict, repo_root: Path) -> tuple[dict, dict]:
             "after frozen temperature scaling (macro over per-dataset ECE)",
         )
     }
-    return metrics, {"temperatures": {
-        name: d.get("temperature") for name, d in sorted(per.items())
-    }}
+    return metrics, {
+        "temperatures": {name: d.get("temperature") for name, d in sorted(per.items())}
+    }
 
 
 def _adapt_consistency(spec: dict, repo_root: Path) -> tuple[dict, dict]:
@@ -254,8 +251,7 @@ def _adapt_consistency(spec: dict, repo_root: Path) -> tuple[dict, dict]:
         metrics["flip_rate"] = _metric(
             flip_rate,
             spec["artifact"],
-            f"mean over {len(flip)} probe datasets: "
-            + ", ".join(sorted(flip)),
+            f"mean over {len(flip)} probe datasets: " + ", ".join(sorted(flip)),
         )
     neg = sub.get("boolq_negation")
     if neg:
@@ -384,9 +380,7 @@ def _adapt_v6_calibration(spec: dict, repo_root: Path) -> tuple[dict, dict]:
         metrics = {name: metrics[name] for name in only}
     extra = {
         "calibrator": f"per-class temperature (arm {arm})",
-        "calibration": spec.get(
-            "calibration", "scripts/sft/calibration_v6.json"
-        ),
+        "calibration": spec.get("calibration", "scripts/sft/calibration_v6.json"),
     }
     if only is None:
         extra["per_dataset"] = {
@@ -419,16 +413,13 @@ def _validate_third_party_metrics(raw: dict, path: Path) -> dict:
     for name, spec in metrics_in.items():
         if name not in KNOWN_METRICS:
             raise LeaderboardError(
-                f"{path}: unknown metric {name!r} "
-                f"(known: {', '.join(KNOWN_METRICS)})"
+                f"{path}: unknown metric {name!r} (known: {', '.join(KNOWN_METRICS)})"
             )
         if not isinstance(spec, dict):
             raise LeaderboardError(f"{path}: metric {name} must be an object")
         value = spec.get("value")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise LeaderboardError(
-                f"{path}: metric {name} needs a numeric 'value'"
-            )
+            raise LeaderboardError(f"{path}: metric {name} needs a numeric 'value'")
         artifact = spec.get("artifact")
         if not isinstance(artifact, str) or not artifact.strip():
             raise LeaderboardError(
@@ -461,29 +452,23 @@ def load_entry(path: Path, repo_root: Path | None = None) -> dict:
     if "adapters" in raw:
         adapters = raw["adapters"]
         if not isinstance(adapters, dict) or not adapters:
-            raise LeaderboardError(
-                f"{path}: 'adapters' must be a non-empty object"
-            )
+            raise LeaderboardError(f"{path}: 'adapters' must be a non-empty object")
         seen: set[str] = set()
         for name, spec in adapters.items():
             if name not in ADAPTERS:
                 raise LeaderboardError(
-                    f"{path}: unknown adapter {name!r} "
-                    f"(known: {', '.join(ADAPTERS)})"
+                    f"{path}: unknown adapter {name!r} (known: {', '.join(ADAPTERS)})"
                 )
             if not isinstance(spec, dict):
                 raise LeaderboardError(f"{path}: adapter {name} must be an object")
             artifact = spec.get("artifact", "")
             if not isinstance(artifact, str) or not artifact.strip():
-                raise LeaderboardError(
-                    f"{path}: adapter {name} cites no artifact"
-                )
-            if not artifact.startswith(("http://", "https://")) and not (
-                repo_root / artifact
-            ).exists():
-                raise LeaderboardError(
-                    f"{path}: artifact not found: {artifact}"
-                )
+                raise LeaderboardError(f"{path}: adapter {name} cites no artifact")
+            if (
+                not artifact.startswith(("http://", "https://"))
+                and not (repo_root / artifact).exists()
+            ):
+                raise LeaderboardError(f"{path}: artifact not found: {artifact}")
             new_metrics, new_extra = ADAPTERS[name](spec, repo_root)
             extra.update(new_extra)
             for metric_name, metric in new_metrics.items():
@@ -564,9 +549,7 @@ def render_markdown(entries: list[dict]) -> str:
         "| # | Model | Backbone | "
         + " | ".join(COLUMN_HEADER[c] for c in TABLE_COLUMNS)
         + " |",
-        "|---|---|---|"
-        + "|".join("---" for _ in TABLE_COLUMNS)
-        + "|",
+        "|---|---|---|" + "|".join("---" for _ in TABLE_COLUMNS) + "|",
     ]
     for i, entry in enumerate(ranked, start=1):
         cells = [
@@ -598,11 +581,7 @@ def render_markdown(entries: list[dict]) -> str:
                 f"  - {name} = {metric['value']:.4f} "
                 f"({metric['protocol']}) — artifact: `{metric['artifact']}`"
             )
-        missing = [
-            c
-            for c in KNOWN_METRICS
-            if c not in entry["metrics"]
-        ]
+        missing = [c for c in KNOWN_METRICS if c not in entry["metrics"]]
         if missing:
             lines.append(
                 f"- Not measured: {', '.join(missing)} ({MISSING} in the table)"

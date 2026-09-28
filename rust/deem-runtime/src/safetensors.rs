@@ -81,24 +81,24 @@ impl SafeTensors {
             if name == "__metadata__" {
                 continue;
             }
-            let dtype = Dtype::from_str(
-                meta["dtype"].as_str().unwrap_or_default(),
-            )
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("unknown dtype in {name}"),
-                )
-            })?;
+            let dtype =
+                Dtype::from_str(meta["dtype"].as_str().unwrap_or_default()).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("unknown dtype in {name}"),
+                    )
+                })?;
             let shape: Vec<usize> = meta["shape"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as usize)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_u64().map(|x| x as usize))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let offsets = meta["data_offsets"]
-                .as_array()
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "missing offsets")
-                })?;
+            let offsets = meta["data_offsets"].as_array().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "missing offsets")
+            })?;
             let start = offsets[0].as_u64().unwrap_or(0) as usize;
             let end = offsets[1].as_u64().unwrap_or(0) as usize;
             if end > data.len() {

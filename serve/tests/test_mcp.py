@@ -5,10 +5,9 @@ import subprocess
 import sys
 
 import pytest
-
-from serve_helpers import FixedBackend
-from deem_mcp import McpServer, TOOLS
+from deem_mcp import TOOLS, McpServer
 from deem_server import DeemCore
+from serve_helpers import FixedBackend
 
 
 def make_mcp(backend=None):
@@ -58,8 +57,7 @@ def test_classify_call():
     response = call_tool(
         server,
         "classify",
-        {"state": "the repo", "instructions": "merge?",
-         "options": ["merge", "reject"]},
+        {"state": "the repo", "instructions": "merge?", "options": ["merge", "reject"]},
     )
     answer = tool_payload(response)
     assert answer["type"] == "choice"
@@ -101,9 +99,7 @@ def test_check_call():
 
 def test_unknown_tool_is_error():
     server = make_mcp()
-    response = call_tool(
-        server, "teleport", {"state": "x", "instructions": "?"}
-    )
+    response = call_tool(server, "teleport", {"state": "x", "instructions": "?"})
     assert response["result"].get("isError") is True
 
 
@@ -115,9 +111,7 @@ def test_invalid_arguments_reported():
         {"state": "x", "instructions": "pick", "options": ["only-one"]},
     )
     assert response["result"].get("isError") is True
-    assert "error" in json.loads(
-        response["result"]["content"][0]["text"]
-    )
+    assert "error" in json.loads(response["result"]["content"][0]["text"])
 
 
 def test_unknown_method_with_id():
@@ -160,8 +154,7 @@ def test_stdio_roundtrip():
         assert responses[-1]["result"]["serverInfo"]["name"] == "deem-mcp"
 
         proc.stdin.write(
-            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            + "\n"
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
         )
         proc.stdin.flush()
 
@@ -188,9 +181,7 @@ def test_stdio_roundtrip():
         )
         proc.stdin.flush()
         read()
-        answer = json.loads(
-            responses[-1]["result"]["content"][0]["text"]
-        )
+        answer = json.loads(responses[-1]["result"]["content"][0]["text"])
         assert answer["type"] == "noul"
         assert answer["noul"] == pytest.approx(0.5)  # uniform stub
     finally:

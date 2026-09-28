@@ -23,7 +23,7 @@ fn main() {
     let readout = match deem_runtime::readout::Readout::load(&PathBuf::from(&checkpoint), quantize)
     {
         Ok(r) => r,
- Err(e) => {
+        Err(e) => {
             eprintln!("failed to load checkpoint: {e}");
             std::process::exit(2);
         }
@@ -35,11 +35,5 @@ fn main() {
 
     // also support DEEM_CHECKPOINT=path:weight,checkpoint2:weight ensembles?
     // v1: single model.
-    deem_runtime::server::run(
-        Arc::new(readout),
-        &host,
-        port,
-        &model_id,
-        calibration,
-    );
+    deem_runtime::server::run(Arc::new(readout), &host, port, &model_id, calibration);
 }

@@ -84,9 +84,7 @@ def normalize(
         raise ConfusionError("empty probability vector")
     total = sum(vec)
     if total <= 0.0:
-        raise ConfusionError(
-            "probability vector sums to <= 0; it encodes no belief"
-        )
+        raise ConfusionError("probability vector sums to <= 0; it encodes no belief")
     if any(x < 0.0 for x in vec):
         raise ConfusionError("probability vector contains negative entries")
     if abs(total - 1.0) <= EPS:
@@ -104,8 +102,9 @@ def argmax(probs: Optional[Sequence[float]]) -> int:
     return best
 
 
-def _flatten(probs: Sequence[Sequence[float] | None],
-             outcomes: Sequence[int]) -> Iterator[tuple[tuple[float, ...], int]]:
+def _flatten(
+    probs: Sequence[Sequence[float] | None], outcomes: Sequence[int]
+) -> Iterator[tuple[tuple[float, ...], int]]:
     if len(probs) != len(outcomes):
         raise ConfusionError(
             f"probs/outcomes length mismatch: {len(probs)} != {len(outcomes)}"
@@ -141,9 +140,7 @@ def derived_confidence(probs: Optional[Sequence[float]]) -> float:
         # the defensive rescaling below crush [p] into [1.0].
         p = float(probs[0])
         if not 0.0 <= p <= 1.0:
-            raise ConfusionError(
-                f"single-option confidence {p} is not a probability"
-            )
+            raise ConfusionError(f"single-option confidence {p} is not a probability")
         return p
     vec = normalize(probs)
     n = len(vec)
@@ -373,7 +370,9 @@ def auc_of_tradeoff(
     if not points:
         return 0.0
     # Build (automation, accuracy) pairs, sorting by automation ascending.
-    pairs: list[tuple[float, float]] = [(p["automation"], p["accuracy"]) for p in points]
+    pairs: list[tuple[float, float]] = [
+        (p["automation"], p["accuracy"]) for p in points
+    ]
     pairs.sort(key=lambda x: (x[0], -x[1]))
     # Carry accuracy from the smallest positive-automation point onto all
     # zero-automation points, so the curve meets the y-axis at the accuracy
@@ -502,6 +501,4 @@ def conditioned_flip_ok(
     margin: float = FLIP_GATE_MARGIN,
 ) -> bool:
     """Boolean convenience wrapper for :func:`conditioned_flip_gate`."""
-    return bool(
-        conditioned_flip_gate(flip_rate, accuracy, n_options, margin)["ok"]
-    )
+    return bool(conditioned_flip_gate(flip_rate, accuracy, n_options, margin)["ok"])

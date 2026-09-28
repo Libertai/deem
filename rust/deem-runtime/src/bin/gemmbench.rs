@@ -19,7 +19,10 @@ fn main() {
     let flops = 2.0 * (m * n * k) as f64;
     println!(
         "gemm [{}x{}]x[{}x{}]: {:.2}ms  ({:.0} GFLOPs/s)",
-        m, k, k, n,
+        m,
+        k,
+        k,
+        n,
         best * 1e3,
         flops / best / 1e9
     );
@@ -66,8 +69,7 @@ fn main() {
         let k = 1024usize;
         let a: Vec<f32> = vec![0.01; m * k];
         let b_q: Vec<i8> = vec![7; n * k];
-        let scales: Vec<f32> =
-            vec![0.001; n * k.div_ceil(deem_runtime::kernels::I8_WEIGHT_BLK)];
+        let scales: Vec<f32> = vec![0.001; n * k.div_ceil(deem_runtime::kernels::I8_WEIGHT_BLK)];
         let b_sums: Vec<i32> = vec![k as i32 * 7; n];
         let _ = deem_runtime::kernels::gemm_i8(&a, &b_q, &scales, m, n, k);
         let s = Instant::now();

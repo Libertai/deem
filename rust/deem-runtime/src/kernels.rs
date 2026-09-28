@@ -208,20 +208,17 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Vec<f32> 
     let mut out = vec![0.0f32; m * n];
     const NB: usize = 128;
     let out_ptr = out.as_mut_ptr() as usize;
-    (0..n.div_ceil(NB))
-        .into_par_iter()
-        .for_each(|nblk| unsafe {
-            let nb0 = nblk * NB;
-            let nb1 = (nb0 + NB).min(n);
-            (0..m).into_par_iter().for_each(|mi| {
-                let arow = a.get_unchecked(mi * k..mi * k + k);
-                let orow = out_ptr as *mut f32;
-                for i in nb0..nb1 {
-                    *orow.add(mi * n + i) =
-                        simd::dot_f32(arow, b.get_unchecked(i * k..i * k + k));
-                }
-            });
+    (0..n.div_ceil(NB)).into_par_iter().for_each(|nblk| unsafe {
+        let nb0 = nblk * NB;
+        let nb1 = (nb0 + NB).min(n);
+        (0..m).into_par_iter().for_each(|mi| {
+            let arow = a.get_unchecked(mi * k..mi * k + k);
+            let orow = out_ptr as *mut f32;
+            for i in nb0..nb1 {
+                *orow.add(mi * n + i) = simd::dot_f32(arow, b.get_unchecked(i * k..i * k + k));
+            }
         });
+    });
     out
 }
 
@@ -233,41 +230,32 @@ pub const I8_WEIGHT_BLK: usize = 128;
 ///
 /// Each weight-row block is dequantized once into an L2-resident scratch
 /// buffer, then dotted against every activation row (conversion amortized).
-pub fn gemm_i8(
-    a: &[f32],
-    b_q: &[i8],
-    scales: &[f32],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Vec<f32> {
+pub fn gemm_i8(a: &[f32], b_q: &[i8], scales: &[f32], m: usize, n: usize, k: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; m * n];
     const NB: usize = 64;
     let out_ptr = out.as_mut_ptr() as usize;
-    (0..n.div_ceil(NB))
-        .into_par_iter()
-        .for_each(|nblk| unsafe {
-            let nb0 = nblk * NB;
-            let nb0 = nb0;
-            let nb1 = (nb0 + NB).min(n);
-            let blocks = k.div_ceil(I8_WEIGHT_BLK);
-            let mut scratch = vec![0f32; NB * k];
+    (0..n.div_ceil(NB)).into_par_iter().for_each(|nblk| unsafe {
+        let nb0 = nblk * NB;
+        let nb0 = nb0;
+        let nb1 = (nb0 + NB).min(n);
+        let blocks = k.div_ceil(I8_WEIGHT_BLK);
+        let mut scratch = vec![0f32; NB * k];
+        for (bi, i) in (nb0..nb1).enumerate() {
+            let q = &b_q[i * k..(i + 1) * k];
+            let dst = &mut scratch[bi * k..(bi + 1) * k];
+            for (kk, (d, v)) in dst.iter_mut().zip(q).enumerate() {
+                *d = *v as f32 * scales[i * blocks + kk / I8_WEIGHT_BLK];
+            }
+        }
+        for mi in 0..m {
+            let arow = a.get_unchecked(mi * k..mi * k + k);
+            let orow = out_ptr as *mut f32; // indexed below
             for (bi, i) in (nb0..nb1).enumerate() {
-                let q = &b_q[i * k..(i + 1) * k];
-                let dst = &mut scratch[bi * k..(bi + 1) * k];
-                for (kk, (d, v)) in dst.iter_mut().zip(q).enumerate() {
-                    *d = *v as f32 * scales[i * blocks + kk / I8_WEIGHT_BLK];
-                }
+                *orow.add(mi * n + i) =
+                    simd::dot_f32(arow, scratch.get_unchecked(bi * k..bi * k + k));
             }
-            for mi in 0..m {
-                let arow = a.get_unchecked(mi * k..mi * k + k);
-                let orow = out_ptr as *mut f32;  // indexed below
-                for (bi, i) in (nb0..nb1).enumerate() {
-                    *orow.add(mi * n + i) =
-                        simd::dot_f32(arow, scratch.get_unchecked(bi * k..bi * k + k));
-                }
-            }
-        });
+        }
+    });
     out
 }
 
@@ -278,8 +266,8 @@ pub fn gemm_i8(
 pub mod bf16 {
     #[allow(unused_imports)]
     use std::arch::x86_64::{
-        __m512bh, __m512i, _mm512_castsi512_ph, _mm512_dpbf16_ps, _mm512_loadu_si512,
-        _mm512_reduce_add_ps, _mm512_setzero_ps, _mm512_setzero_si512, __m512,
+        __m512, __m512bh, __m512i, _mm512_castsi512_ph, _mm512_dpbf16_ps, _mm512_loadu_si512,
+        _mm512_reduce_add_ps, _mm512_setzero_ps, _mm512_setzero_si512,
     };
     #[inline(always)]
     unsafe fn transmute_bh(v: std::arch::x86_64::__m512i) -> __m512bh {
@@ -298,26 +286,14 @@ pub mod bf16 {
             let b0 = _mm512_loadu_si512(b.as_ptr().add(i) as *const __m512i);
             let a1 = _mm512_loadu_si512(a.as_ptr().add(i + 32) as *const __m512i);
             let b1 = _mm512_loadu_si512(b.as_ptr().add(i + 32) as *const __m512i);
-            acc0 = _mm512_dpbf16_ps(
-                acc0,
-                transmute_bh(a0),
-                transmute_bh(b0),
-            );
-            acc1 = _mm512_dpbf16_ps(
-                acc1,
-                transmute_bh(a1),
-                transmute_bh(b1),
-            );
+            acc0 = _mm512_dpbf16_ps(acc0, transmute_bh(a0), transmute_bh(b0));
+            acc1 = _mm512_dpbf16_ps(acc1, transmute_bh(a1), transmute_bh(b1));
             i += 64;
         }
         if i + 32 <= n {
             let a0 = _mm512_loadu_si512(a.as_ptr().add(i) as *const __m512i);
             let b0 = _mm512_loadu_si512(b.as_ptr().add(i) as *const __m512i);
-            acc0 = _mm512_dpbf16_ps(
-                acc0,
-                transmute_bh(a0),
-                transmute_bh(b0),
-            );
+            acc0 = _mm512_dpbf16_ps(acc0, transmute_bh(a0), transmute_bh(b0));
             i += 32;
         }
         let acc = _mm512_add_ps(acc0, acc1);
@@ -364,13 +340,7 @@ pub mod bf16 {
     /// llama.cpp-style tiled GEMM (tinyBLAS): activations are converted
     /// to bf16 once for the whole tensor, then 4x6 register-blocked
     /// outer-product tiles run with vdpbf16ps, reducing once per tile.
-    pub fn gemm_bf16(
-        a: &[f32],
-        b_bf16: &[u16],
-        m: usize,
-        n: usize,
-        k: usize,
-    ) -> Vec<f32> {
+    pub fn gemm_bf16(a: &[f32], b_bf16: &[u16], m: usize, n: usize, k: usize) -> Vec<f32> {
         use rayon::prelude::*;
         let mut out = vec![0.0f32; m * n];
         if m == 0 || n == 0 || k == 0 {
@@ -383,46 +353,44 @@ pub mod bf16 {
         const RM: usize = 4; // weight rows per tile
         const RN: usize = 6; // activation rows per tile
         let out_ptr = out.as_mut_ptr() as usize;
-        (0..m.div_ceil(RN))
-            .into_par_iter()
-            .for_each(|it| unsafe {
-                let i0 = it * RN;
-                let jc = RN.min(m - i0);
-                let mut qa = vec![0u16; RN * k];
-                for j in 0..jc {
-                    f32_to_bf16_row(
-                        a.get_unchecked((i0 + j) * k..(i0 + j + 1) * k),
-                        &mut qa[j * k..(j + 1) * k],
+        (0..m.div_ceil(RN)).into_par_iter().for_each(|it| unsafe {
+            let i0 = it * RN;
+            let jc = RN.min(m - i0);
+            let mut qa = vec![0u16; RN * k];
+            for j in 0..jc {
+                f32_to_bf16_row(
+                    a.get_unchecked((i0 + j) * k..(i0 + j + 1) * k),
+                    &mut qa[j * k..(j + 1) * k],
+                );
+            }
+            let nt = n.div_ceil(RM);
+            for jt in 0..nt {
+                let j0 = jt * RM;
+                if jc == RN && j0 + RM <= n {
+                    tile_bf16_full(
+                        qa.as_ptr(),
+                        b_bf16.as_ptr(),
+                        out_ptr as *mut f32,
+                        m,
+                        n,
+                        k,
+                        i0,
+                        j0,
+                    );
+                } else {
+                    tile_bf16_edge(
+                        qa.as_ptr(),
+                        b_bf16.as_ptr(),
+                        out_ptr as *mut f32,
+                        m,
+                        n,
+                        k,
+                        i0,
+                        j0,
                     );
                 }
-                let nt = n.div_ceil(RM);
-                for jt in 0..nt {
-                    let j0 = jt * RM;
-                    if jc == RN && j0 + RM <= n {
-                        tile_bf16_full(
-                            qa.as_ptr(),
-                            b_bf16.as_ptr(),
-                            out_ptr as *mut f32,
-                            m,
-                            n,
-                            k,
-                            i0,
-                            j0,
-                        );
-                    } else {
-                        tile_bf16_edge(
-                            qa.as_ptr(),
-                            b_bf16.as_ptr(),
-                            out_ptr as *mut f32,
-                            m,
-                            n,
-                            k,
-                            i0,
-                            j0,
-                        );
-                    }
-                }
-            });
+            }
+        });
         out
     }
 
@@ -454,14 +422,19 @@ pub mod bf16 {
             ];
             let w = [
                 transmute_bh(_mm512_loadu_si512(b.add(j0 * k + kk) as *const __m512i)),
-                transmute_bh(_mm512_loadu_si512(b.add((j0 + 1) * k + kk) as *const __m512i)),
-                transmute_bh(_mm512_loadu_si512(b.add((j0 + 2) * k + kk) as *const __m512i)),
-                transmute_bh(_mm512_loadu_si512(b.add((j0 + 3) * k + kk) as *const __m512i)),
+                transmute_bh(_mm512_loadu_si512(
+                    b.add((j0 + 1) * k + kk) as *const __m512i
+                )),
+                transmute_bh(_mm512_loadu_si512(
+                    b.add((j0 + 2) * k + kk) as *const __m512i
+                )),
+                transmute_bh(_mm512_loadu_si512(
+                    b.add((j0 + 3) * k + kk) as *const __m512i
+                )),
             ];
             for i in 0..RM {
                 for j in 0..RN {
-                    acc[j * RM + i] =
-                        _mm512_dpbf16_ps(acc[j * RM + i], a[j], w[i]);
+                    acc[j * RM + i] = _mm512_dpbf16_ps(acc[j * RM + i], a[j], w[i]);
                 }
             }
             kk += 32;
@@ -508,17 +481,14 @@ pub mod bf16 {
         while kk + 32 <= k {
             let mut a = [transmute_bh(_mm512_setzero_si512()); RN];
             for j in 0..jc {
-                a[j] = transmute_bh(_mm512_loadu_si512(
-                    qa.add(j * k + kk) as *const __m512i,
-                ));
+                a[j] = transmute_bh(_mm512_loadu_si512(qa.add(j * k + kk) as *const __m512i));
             }
             for i in 0..ic {
                 let w = transmute_bh(_mm512_loadu_si512(
-                    b.add((j0 + i) * k + kk) as *const __m512i,
+                    b.add((j0 + i) * k + kk) as *const __m512i
                 ));
                 for j in 0..jc {
-                    acc[j * RM + i] =
-                        _mm512_dpbf16_ps(acc[j * RM + i], a[j], w);
+                    acc[j * RM + i] = _mm512_dpbf16_ps(acc[j * RM + i], a[j], w);
                 }
             }
             kk += 32;
@@ -587,41 +557,33 @@ pub mod vnni {
         let mut out = vec![0.0f32; m * n];
         const NB: usize = 64;
         let out_ptr = out.as_mut_ptr() as usize;
-        (0..n.div_ceil(NB))
-            .into_par_iter()
-            .for_each(|nblk| unsafe {
-                let nb0 = nblk * NB;
-                let nb1 = (nb0 + NB).min(n);
-                let mut qa = vec![0u8; k];
-                for mi in 0..m {
-                    let arow = a.get_unchecked(mi * k..mi * k + k);
-                    // dynamic per-row symmetric quantization
-                    let mut maxabs = 0.0f32;
-                    for v in arow.iter() {
-                        maxabs = maxabs.max(v.abs());
-                    }
-                    let inv = if maxabs > 0.0 {
-                        127.0 / maxabs
-                    } else {
-                        0.0
-                    };
-                    for (q, v) in qa.iter_mut().zip(arow.iter()) {
-                        *q = ((v * inv).round() as i32 + 128).clamp(0, 255) as u8;
-                    }
-                    let orow = out_ptr as *mut f32;
-                    for i in nb0..nb1 {
-                        let bq = b_q.get_unchecked(i * k..i * k + k);
-                        let dot =
-                            dot_u8_i8_vnni(&qa, bq) - 128 * b_sum.get_unchecked(i);
-                        *orow.add(mi * n + i) =
-                            dot as f32 * (maxabs / 127.0) * *scales.get_unchecked(i);
-                    }
+        (0..n.div_ceil(NB)).into_par_iter().for_each(|nblk| unsafe {
+            let nb0 = nblk * NB;
+            let nb1 = (nb0 + NB).min(n);
+            let mut qa = vec![0u8; k];
+            for mi in 0..m {
+                let arow = a.get_unchecked(mi * k..mi * k + k);
+                // dynamic per-row symmetric quantization
+                let mut maxabs = 0.0f32;
+                for v in arow.iter() {
+                    maxabs = maxabs.max(v.abs());
                 }
-            });
+                let inv = if maxabs > 0.0 { 127.0 / maxabs } else { 0.0 };
+                for (q, v) in qa.iter_mut().zip(arow.iter()) {
+                    *q = ((v * inv).round() as i32 + 128).clamp(0, 255) as u8;
+                }
+                let orow = out_ptr as *mut f32;
+                for i in nb0..nb1 {
+                    let bq = b_q.get_unchecked(i * k..i * k + k);
+                    let dot = dot_u8_i8_vnni(&qa, bq) - 128 * b_sum.get_unchecked(i);
+                    *orow.add(mi * n + i) =
+                        dot as f32 * (maxabs / 127.0) * *scales.get_unchecked(i);
+                }
+            }
+        });
         out
     }
 }
-
 
 /// Solve (I + L) X = B where B is [n, m] row-major, L strictly lower [n, n].
 pub fn solve_unit_lower_tri_multi(rhs: &mut [f32], lower: &[f32], n: usize, m: usize) {
@@ -665,7 +627,9 @@ mod tests {
         let m = 3;
         let n = 5;
         let k = 300;
-        let a: Vec<f32> = (0..m * k).map(|i| ((i * 7 % 23) as f32) * 0.1 - 1.0).collect();
+        let a: Vec<f32> = (0..m * k)
+            .map(|i| ((i * 7 % 23) as f32) * 0.1 - 1.0)
+            .collect();
         // Rows and blocks with very different magnitudes, so a per-row scale
         // cannot reproduce them.
         let w: Vec<f32> = (0..n * k)
@@ -691,14 +655,12 @@ mod tests {
 #[cfg(target_arch = "x86_64")]
 pub mod i8t {
     use std::arch::x86_64::{
-        __m128i, __m512, __m512bh, __m512i, _mm512_add_epi32, _mm512_add_ps,
-        _mm512_andnot_ps, _mm512_cvtepi32_epi8, _mm512_cvtepi32_ps,
-        _mm512_cvt_roundps_epu32, _mm512_dpbusd_epi32, _mm512_fmadd_ps,
-        _mm512_loadu_ps, _mm512_loadu_si512, _mm512_max_ps, _mm512_min_ps,
-        _mm512_mul_ps, _mm512_reduce_add_epi32, _mm512_reduce_add_ps,
-        _mm512_reduce_max_ps, _mm512_set1_epi32, _mm512_set1_ps, _mm512_setzero,
-        _mm512_setzero_ps, _mm512_setzero_si512, _mm512_sub_epi32, _mm512_sub_ps,
-        _mm_storeu_si128,
+        __m128i, __m512, __m512bh, __m512i, _mm512_add_epi32, _mm512_add_ps, _mm512_andnot_ps,
+        _mm512_cvt_roundps_epu32, _mm512_cvtepi32_epi8, _mm512_cvtepi32_ps, _mm512_dpbusd_epi32,
+        _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_loadu_si512, _mm512_max_ps, _mm512_min_ps,
+        _mm512_mul_ps, _mm512_reduce_add_epi32, _mm512_reduce_add_ps, _mm512_reduce_max_ps,
+        _mm512_set1_epi32, _mm512_set1_ps, _mm512_setzero, _mm512_setzero_ps, _mm512_setzero_si512,
+        _mm512_sub_epi32, _mm512_sub_ps, _mm_storeu_si128,
     };
 
     /// Activation quantization block size (elements per scale).
@@ -719,8 +681,7 @@ pub mod i8t {
             let mut maxabs = 0.0f32;
             while i + 16 <= e {
                 let v = _mm512_loadu_ps(src.as_ptr().add(i));
-                maxabs =
-                    maxabs.max(_mm512_reduce_max_ps(_mm512_andnot_ps(sign, v)));
+                maxabs = maxabs.max(_mm512_reduce_max_ps(_mm512_andnot_ps(sign, v)));
                 i += 16;
             }
             while i < e {
@@ -767,11 +728,7 @@ pub mod i8t {
     }
 
     /// Debug/test hook: run the row quantizer.
-    pub fn quantize_row_u8_pub(
-        src: &[f32],
-        dst: &mut [u8],
-        scales: &mut [f32],
-    ) {
+    pub fn quantize_row_u8_pub(src: &[f32], dst: &mut [u8], scales: &mut [f32]) {
         unsafe { quantize_row_u8(src, dst, scales) };
     }
 
@@ -787,7 +744,7 @@ pub mod i8t {
         k: usize,
         i0: usize,
         j0: usize,
-        sa: &[f32],      // [6 * nb] activation scales
+        sa: &[f32], // [6 * nb] activation scales
         nb: usize,
         w_scales: &[f32], // [n, nb]
         wsums: &[i32],    // [n * nb] per-block weight sums
@@ -809,11 +766,9 @@ pub mod i8t {
                     _mm512_loadu_si512(qa.add(5 * k + kk) as *const __m512i),
                 ];
                 for i in 0..4usize {
-                    let wv =
-                        _mm512_loadu_si512(w.add((j0 + i) * k + kk) as *const __m512i);
+                    let wv = _mm512_loadu_si512(w.add((j0 + i) * k + kk) as *const __m512i);
                     for j in 0..6usize {
-                        acc[j * 4 + i] =
-                            _mm512_dpbusd_epi32(acc[j * 4 + i], a[j], wv);
+                        acc[j * 4 + i] = _mm512_dpbusd_epi32(acc[j * 4 + i], a[j], wv);
                     }
                 }
                 kk += 64;
@@ -824,20 +779,16 @@ pub mod i8t {
                 let corr = _mm512_set1_epi32(wsum / 16);
                 for j in 0..6usize {
                     let d = _mm512_sub_epi32(acc[j * 4 + i], corr);
-                    let sw = (*sa.get_unchecked(j * nb + b))
-                        * w_scales.get_unchecked((j0 + i) * nb + b);
-                    facc[j * 4 + i] = _mm512_fmadd_ps(
-                        _mm512_cvtepi32_ps(d),
-                        _mm512_set1_ps(sw),
-                        facc[j * 4 + i],
-                    );
+                    let sw =
+                        (*sa.get_unchecked(j * nb + b)) * w_scales.get_unchecked((j0 + i) * nb + b);
+                    facc[j * 4 + i] =
+                        _mm512_fmadd_ps(_mm512_cvtepi32_ps(d), _mm512_set1_ps(sw), facc[j * 4 + i]);
                 }
             }
         }
         for j in 0..6usize {
             for i in 0..4usize {
-                *out.add((i0 + j) * n + j0 + i) =
-                    _mm512_reduce_add_ps(facc[j * 4 + i]);
+                *out.add((i0 + j) * n + j0 + i) = _mm512_reduce_add_ps(facc[j * 4 + i]);
             }
         }
     }
@@ -872,11 +823,9 @@ pub mod i8t {
                     a[j] = _mm512_loadu_si512(qa.add(j * k + kk) as *const __m512i);
                 }
                 for i in 0..ic {
-                    let wv =
-                        _mm512_loadu_si512(w.add((j0 + i) * k + kk) as *const __m512i);
+                    let wv = _mm512_loadu_si512(w.add((j0 + i) * k + kk) as *const __m512i);
                     for j in 0..jc {
-                        acc[j * RM + i] =
-                            _mm512_dpbusd_epi32(acc[j * RM + i], a[j], wv);
+                        acc[j * RM + i] = _mm512_dpbusd_epi32(acc[j * RM + i], a[j], wv);
                     }
                 }
                 kk += 64;
@@ -886,8 +835,8 @@ pub mod i8t {
                 let corr = _mm512_set1_epi32(wsum / 16);
                 for j in 0..jc {
                     let d = _mm512_sub_epi32(acc[j * RM + i], corr);
-                    let sw = (*sa.get_unchecked(j * nb + b))
-                        * w_scales.get_unchecked((j0 + i) * nb + b);
+                    let sw =
+                        (*sa.get_unchecked(j * nb + b)) * w_scales.get_unchecked((j0 + i) * nb + b);
                     facc[j * RM + i] = _mm512_fmadd_ps(
                         _mm512_cvtepi32_ps(d),
                         _mm512_set1_ps(sw),
@@ -898,8 +847,7 @@ pub mod i8t {
         }
         for j in 0..jc {
             for i in 0..ic {
-                *out.add((i0 + j) * n + j0 + i) =
-                    _mm512_reduce_add_ps(facc[j * RM + i]);
+                *out.add((i0 + j) * n + j0 + i) = _mm512_reduce_add_ps(facc[j * RM + i]);
             }
         }
     }
@@ -1042,10 +990,7 @@ pub mod scan {
             );
             i += 16;
         }
-        let acc = _mm512_add_ps(
-            _mm512_add_ps(a0, a1),
-            _mm512_add_ps(a2, a3),
-        );
+        let acc = _mm512_add_ps(_mm512_add_ps(a0, a1), _mm512_add_ps(a2, a3));
         let mut total = _mm512_reduce_add_ps(acc);
         while i < k {
             total += a[i] * b[i];
@@ -1184,8 +1129,6 @@ pub mod scan {
         }
     }
 
-
-
     /// out[i] = x[i] * w[i] * zs[i] * scale  (elementwise, vectorized)
     pub fn mul3_scaled(x: &[f32], w: &[f32], zs: &[f32], scale: f32, out: &mut [f32]) {
         #[cfg(target_arch = "x86_64")]
@@ -1246,10 +1189,7 @@ pub mod scan {
                 let a = _mm512_loadu_ps(acc.as_ptr().add(i + off));
                 let b = _mm512_loadu_ps(w.as_ptr().add(i + off));
                 let c = _mm512_loadu_ps(x.as_ptr().add(i + off));
-                _mm512_storeu_ps(
-                    acc.as_mut_ptr().add(i + off),
-                    _mm512_fmadd_ps(b, c, a),
-                );
+                _mm512_storeu_ps(acc.as_mut_ptr().add(i + off), _mm512_fmadd_ps(b, c, a));
             }
             i += 32;
         }
@@ -1266,7 +1206,6 @@ pub mod scan {
     pub fn dot_xx(x: &[f32]) -> f32 {
         super::simd::dot_f32(x, x)
     }
-
 
     /// out[i] = silu(g[i]) * u[i], vectorized (no allocation).
     pub fn silu_mul(g: &[f32], u: &[f32], out: &mut [f32]) {
@@ -1305,7 +1244,6 @@ pub mod scan {
             i += 1;
         }
     }
-
 
     /// x[i] *= s, vectorized.
     pub fn scale_in_place(x: &mut [f32], s: f32) {
@@ -1355,7 +1293,6 @@ pub mod scan {
             *v = *v * mul + add;
         }
     }
-
 
     /// x[i] = sigmoid(x[i]), vectorized.
     pub fn sigmoid_in_place(x: &mut [f32]) {
@@ -1425,11 +1362,7 @@ pub mod scan {
             let v = _mm512_loadu_ps(x.as_ptr().add(i));
             let e = exp16(_mm512_xor_ps(v, neg));
             let sig = _mm512_div_ps(one, _mm512_add_ps(one, e));
-            let r = if is_silu {
-                _mm512_mul_ps(v, sig)
-            } else {
-                sig
-            };
+            let r = if is_silu { _mm512_mul_ps(v, sig) } else { sig };
             _mm512_storeu_ps(x.as_mut_ptr().add(i), r);
             i += 16;
         }
@@ -1439,11 +1372,7 @@ pub mod scan {
             let v = _mm512_loadu_ps(buf.as_ptr());
             let e = exp16(_mm512_xor_ps(v, neg));
             let sig = _mm512_div_ps(one, _mm512_add_ps(one, e));
-            let r = if is_silu {
-                _mm512_mul_ps(v, sig)
-            } else {
-                sig
-            };
+            let r = if is_silu { _mm512_mul_ps(v, sig) } else { sig };
             _mm512_storeu_ps(buf.as_mut_ptr(), r);
             x[i..n].copy_from_slice(&buf[..n - i]);
         }
@@ -1476,8 +1405,7 @@ pub mod scan {
         }
         if i < n {
             let mut buf = [0f32; 16];
-            buf[..n - i]
-                .copy_from_slice(unsafe { x.get_unchecked(i..n) });
+            buf[..n - i].copy_from_slice(unsafe { x.get_unchecked(i..n) });
             let mut v = _mm512_loadu_ps(buf.as_ptr());
             v = exp16(v);
             _mm512_storeu_ps(buf.as_mut_ptr(), v);
@@ -1491,11 +1419,7 @@ pub mod scan {
         use std::arch::x86_64::*;
         let log2e = _mm512_set1_ps(std::f32::consts::LOG2_E);
         let n = _mm512_roundscale_ps(_mm512_mul_ps(x, log2e), 0);
-        let r = _mm512_fnmadd_ps(
-            n,
-            _mm512_set1_ps(std::f32::consts::LN_2),
-            x,
-        );
+        let r = _mm512_fnmadd_ps(n, _mm512_set1_ps(std::f32::consts::LN_2), x);
         // Horner, coefficients of e^r Taylor series
         let mut p = _mm512_set1_ps(1.0 / 720.0);
         p = _mm512_fmadd_ps(r, p, _mm512_set1_ps(1.0 / 120.0));
@@ -1507,7 +1431,7 @@ pub mod scan {
         _mm512_scalef_ps(p, n)
     }
 
-/// Solve (I + L) X = B where L strictly lower [n,n], B is [n,width].
+    /// Solve (I + L) X = B where L strictly lower [n,n], B is [n,width].
     /// Returns the solved copy; input untouched.
     pub fn solve_tri_copy(b: &[f32], lower: &[f32], n: usize, width: usize) -> Vec<f32> {
         let mut x = b.to_vec();
@@ -1553,10 +1477,7 @@ pub mod scan {
                     for off in [0, 16] {
                         let s = _mm512_loadu_ps(src.add(j + off));
                         let d = _mm512_loadu_ps(dst.add(j + off));
-                        _mm512_storeu_ps(
-                            dst.add(j + off),
-                            _mm512_fnmadd_ps(r, s, d),
-                        );
+                        _mm512_storeu_ps(dst.add(j + off), _mm512_fnmadd_ps(r, s, d));
                     }
                     j += 32;
                 }

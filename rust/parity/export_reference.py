@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO / "serve"))
 
 PROMPT = (
     "<state>\n"
-    "{\"compact\": \"deploy box prod-1: build #4021 green, 3 unit tests flaky, Friday 16:55\"}\n"
+    '{"compact": "deploy box prod-1: build #4021 green, 3 unit tests flaky, Friday 16:55"}\n'
     "</state>\n\n"
     "Question 1: What should we do with this release?\n"
     "Options:\n(A) deploy\n(B) hold\n(C) rollback\nAnswer 1: ("
@@ -41,9 +41,7 @@ def main():
 
     device = args.device
     tok = AutoTokenizer.from_pretrained(args.checkpoint)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.checkpoint, dtype=torch.bfloat16
-    )
+    model = AutoModelForCausalLM.from_pretrained(args.checkpoint, dtype=torch.bfloat16)
     model.to(device)
     model.eval()
 
@@ -58,11 +56,7 @@ def main():
     per_layer = {}
     hooks = []
     for i, layer in enumerate(model.model.layers):
-        hooks.append(
-            layer.register_forward_hook(
-                lambda _m, _o, idx=i: None
-            )
-        )
+        hooks.append(layer.register_forward_hook(lambda _m, _o, idx=i: None))
     hidden_by_layer = {}
 
     # manual capture: run each layer sequentially
@@ -88,9 +82,7 @@ def main():
         per_layer["final_norm"] = h[0].float().cpu().numpy()
         last = h[0, len(ids) - 1]
         logits = model.lm_head(last).float()
-        letters = logits.index_select(
-            0, torch.tensor(letter_ids, device=device)
-        )
+        letters = logits.index_select(0, torch.tensor(letter_ids, device=device))
     for hook in hooks:
         hook.remove()
 
@@ -119,9 +111,7 @@ def main():
         arr.tofile(raw_dir / f"{key}.bin")
         manifest[key] = {"shape": list(arr.shape)}
     (out_dir / "manifest.json").write_text(
-        __import__("json").dumps(
-            {k: v["shape"] for k, v in manifest.items()}
-        )
+        __import__("json").dumps({k: v["shape"] for k, v in manifest.items()})
     )
     print(f"wrote {args.out} + raw tensors")
     print(f"wrote {args.out}")

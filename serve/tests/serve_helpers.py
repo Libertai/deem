@@ -5,12 +5,11 @@ whichever test directory's conftest pytest loaded first.
 """
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-
-import sys
 from pathlib import Path
 
 SERVE_DIR = Path(__file__).resolve().parents[1]
@@ -18,9 +17,7 @@ if str(SERVE_DIR) not in sys.path:
     sys.path.insert(0, str(SERVE_DIR))
 
 from deem_server import (  # noqa: E402
-    Calibration,
     DeemCore,
-    RequestError,
     make_server,
 )
 

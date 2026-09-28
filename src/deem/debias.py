@@ -106,9 +106,7 @@ def template_index(question, seed: Optional[Union[int, str]] = None) -> int:
     return crc % len(templates)
 
 
-def templated_instructions(
-    question, seed: Optional[Union[int, str]] = None
-) -> str:
+def templated_instructions(question, seed: Optional[Union[int, str]] = None) -> str:
     """The question's instructions re-phrased by its seeded template."""
     templates = templates_for(question)
     index = template_index(question, seed)
@@ -134,9 +132,7 @@ def templated_question(question, seed: Optional[Union[int, str]] = None):
 #: as canonical JSON ``null`` — an explicit, unambiguous empty state.
 
 
-def pmi_prior(
-    scorer: Callable[[str], Sequence], question
-) -> list:
+def pmi_prior(scorer: Callable[[str], Sequence], question) -> list:
     """Score a question's options *without* the state (PMI-style prior).
 
     :param scorer: a callable that maps a prompt string (the question

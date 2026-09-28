@@ -45,9 +45,7 @@ def test_prompt_layout_with_criteria():
 
 def test_noul_single_criterion_and_empty_instructions():
     qs = QuestionSet({"q": NoulQuestion("", if_false="never")})
-    assert build_prompt("s", qs).endswith(
-        "Question 1: \nFalse if: never\nAnswer 1: ("
-    )
+    assert build_prompt("s", qs).endswith("Question 1: \nFalse if: never\nAnswer 1: (")
 
 
 def test_all_none_descriptions_render_bare():

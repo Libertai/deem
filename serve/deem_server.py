@@ -70,7 +70,6 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # Make `deem` importable: installed editable in .venv, or from ../src.
@@ -245,9 +244,7 @@ class TorchBackend:
                     f"options",
                     code="unsupported_option_count",
                 )
-        encoded = [
-            self.tokenizer.encode(p, add_special_tokens=False) for p in prompts
-        ]
+        encoded = [self.tokenizer.encode(p, add_special_tokens=False) for p in prompts]
         results = []
         with self._lock:
             for i in range(0, len(encoded), self.batch_size):
@@ -286,9 +283,7 @@ class EnsembleBackend:
         self.name = "ensemble:" + "+".join(
             f"{getattr(b, 'name', 'custom')}" for b, _ in self.members
         )
-        self.max_letters = min(
-            getattr(b, "max_letters", 26) for b, _ in self.members
-        )
+        self.max_letters = min(getattr(b, "max_letters", 26) for b, _ in self.members)
 
     @staticmethod
     def _geo_blend(dists, weights):
@@ -331,7 +326,10 @@ class EnsembleBackend:
         # option space; then blend members (average-then-blend)
         for group in groups:
             start, n_orders, n, perms = (
-                group["start"], group["n_orders"], group["n_valid"], group["perms"]
+                group["start"],
+                group["n_orders"],
+                group["n_valid"],
+                group["perms"],
             )
             member_dists = []
             for weight, slots in per_member:
@@ -347,18 +345,12 @@ class EnsembleBackend:
                         probs = remapped
                     order_dists.append(probs)
                 member_dists.append(
-                    [
-                        sum(od[i] for od in order_dists) / n_orders
-                        for i in range(n)
-                    ]
+                    [sum(od[i] for od in order_dists) / n_orders for i in range(n)]
                 )
             weights = [w for w, _ in per_member]
             blended = self._geo_blend(member_dists, weights)
-            out.append(
-                {"logits": blended, "tokens": per_member[0][1][start]["tokens"]}
-            )
+            out.append({"logits": blended, "tokens": per_member[0][1][start]["tokens"]})
         return out
-
 
 
 # ---------------------------------------------------------------------------
@@ -394,13 +386,13 @@ class Calibration:
     ``None``.
     """
 
-    def __init__(self, primitive_temps=None, dataset_temps=None,
-                 dataset_class_temps=None):
+    def __init__(
+        self, primitive_temps=None, dataset_temps=None, dataset_class_temps=None
+    ):
         self.primitive_temps = dict(primitive_temps or {})
         self.dataset_temps = dict(dataset_temps or {})
         self.dataset_class_temps = {
-            name: list(temps)
-            for name, temps in (dataset_class_temps or {}).items()
+            name: list(temps) for name, temps in (dataset_class_temps or {}).items()
         }
         for mapping in (self.primitive_temps, self.dataset_temps):
             for name, value in mapping.items():
@@ -432,15 +424,12 @@ class Calibration:
             nested = [
                 v
                 for v in data.values()
-                if isinstance(v, dict)
-                and ("per_primitive" in v or "per_dataset" in v)
+                if isinstance(v, dict) and ("per_primitive" in v or "per_dataset" in v)
             ]
             if nested:
                 if key is not None:
                     if key not in data:
-                        raise BackendError(
-                            f"calibration key {key!r} not found in file"
-                        )
+                        raise BackendError(f"calibration key {key!r} not found in file")
                     data = data[key]
                 else:
                     data = nested[0]
@@ -460,8 +449,10 @@ class Calibration:
     def _parse_flat(data):
         out = {}
         for name, value in data.items():
-            out[name] = float(value) if not isinstance(value, dict) else (
-                float(value.get("temperature", 1.0))
+            out[name] = (
+                float(value)
+                if not isinstance(value, dict)
+                else (float(value.get("temperature", 1.0)))
             )
         return out
 
@@ -586,9 +577,7 @@ def parse_question(qid, spec):
             options = list(criteria)
             descriptions = list(criteria.values())
         elif criteria is not None:
-            raise ValidationError(
-                at_criteria, "must map each option to a description"
-            )
+            raise ValidationError(at_criteria, "must map each option to a description")
         elif isinstance(options_alias, list):
             options = _string_list(options_alias, loc + ["options"])
             descriptions = None
@@ -717,8 +706,14 @@ class DeemCore:
     on JevBench (reflex-style order averaging).
     """
 
-    def __init__(self, backend, calibration=None, model_id=DEFAULT_MODEL_ID,
-                 max_questions=64, n_orders=1):
+    def __init__(
+        self,
+        backend,
+        calibration=None,
+        model_id=DEFAULT_MODEL_ID,
+        max_questions=64,
+        n_orders=1,
+    ):
         self.backend = backend
         self.calibration = calibration or Calibration()
         self.model_id = model_id
@@ -739,7 +734,9 @@ class DeemCore:
         )
         max_letters = getattr(self.backend, "max_letters", MAX_OPTIONS)
         for qid, question, qtype, _ in parsed:
-            n = len(getattr(question, "options", None) or getattr(question, "levels", ()))
+            n = len(
+                getattr(question, "options", None) or getattr(question, "levels", ())
+            )
             if n > max_letters:
                 raise ValidationError(
                     ["questions", qid, "criteria"],
@@ -767,7 +764,8 @@ class DeemCore:
                     )
                 )
         n_valids = [
-            2 if qtype == "noul"
+            2
+            if qtype == "noul"
             else len(getattr(question, "options", None) or question.levels)
             for _, question, qtype, _ in parsed
         ]
@@ -782,9 +780,9 @@ class DeemCore:
         # exact formula the JevBench numbers were measured with.
         groups = None
         try:
-            accepts_groups = "groups" in _inspect.signature(
-                self.backend.slot_logits
-            ).parameters
+            accepts_groups = (
+                "groups" in _inspect.signature(self.backend.slot_logits).parameters
+            )
         except (TypeError, ValueError):
             accepts_groups = False
         if accepts_groups:
@@ -799,9 +797,7 @@ class DeemCore:
             ]
 
         if accepts_groups:
-            slots = self.backend.slot_logits(
-                prompts, slot_n_valids, groups=groups
-            )
+            slots = self.backend.slot_logits(prompts, slot_n_valids, groups=groups)
         else:
             slots = self.backend.slot_logits(prompts, slot_n_valids)
         answers = {}
@@ -818,9 +814,7 @@ class DeemCore:
                 idx += len(perms)
                 read_perms = perms
             temperature = self.calibration.temperature_for(qtype, dataset)
-            class_temps = self.calibration.class_temperatures_for(
-                dataset, n_valids[i]
-            )
+            class_temps = self.calibration.class_temperatures_for(dataset, n_valids[i])
             results = []
             for perm, slot in zip(read_perms, order_slots):
                 logits = slot["logits"][: n_valids[i]]
@@ -878,8 +872,7 @@ class DeemHandler(BaseHTTPRequestHandler):
         if os.environ.get("DEEM_ACCESS_LOG"):
             sys.stderr.write(
                 "%s - - [%s] %s\n"
-                % (self.address_string(), self.log_date_time_string(),
-                   format % args)
+                % (self.address_string(), self.log_date_time_string(), format % args)
             )
 
     # -- helpers ---------------------------------------------------------
@@ -896,9 +889,7 @@ class DeemHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_error(self, status, message, code="error"):
-        self._send_json(
-            status, {"detail": {"error_type": code, "message": message}}
-        )
+        self._send_json(status, {"detail": {"error_type": code, "message": message}})
 
     def _send_validation_error(self, exc):
         self._send_json(
@@ -1007,18 +998,19 @@ def main(argv=None):
     )
     parser.add_argument("--host", default=os.environ.get("DEEM_HOST", "127.0.0.1"))
     parser.add_argument(
-        "--port", type=int,
-        default=int(os.environ.get("DEEM_PORT", DEFAULT_PORT))
+        "--port", type=int, default=int(os.environ.get("DEEM_PORT", DEFAULT_PORT))
     )
     parser.add_argument(
         "--model-id", default=os.environ.get("DEEM_MODEL_ID", DEFAULT_MODEL_ID)
     )
     parser.add_argument(
-        "--checkpoint", default=os.environ.get("DEEM_CHECKPOINT", ""),
+        "--checkpoint",
+        default=os.environ.get("DEEM_CHECKPOINT", ""),
         help="HF checkpoint dir (default: deterministic stub backend)",
     )
     parser.add_argument(
-        "--calibration", default=os.environ.get("DEEM_CALIBRATION", ""),
+        "--calibration",
+        default=os.environ.get("DEEM_CALIBRATION", ""),
         help="calibration JSON with per-dataset/primitive temperatures",
     )
     parser.add_argument(
@@ -1027,7 +1019,8 @@ def main(argv=None):
         help="version key inside the calibration file",
     )
     parser.add_argument(
-        "--device", default=os.environ.get("DEEM_DEVICE", "auto"),
+        "--device",
+        default=os.environ.get("DEEM_DEVICE", "auto"),
         help="cuda | cpu | auto",
     )
     parser.add_argument(
@@ -1040,9 +1033,7 @@ def main(argv=None):
     if args.checkpoint:
         # Comma-separated ensemble: "ckptA:0.5,ckptB:0.5" blends the
         # members' answer-slot distributions in log space (EnsembleBackend).
-        entries = [
-            part.split(":") for part in args.checkpoint.split(",") if part
-        ]
+        entries = [part.split(":") for part in args.checkpoint.split(",") if part]
         backend = None
         if len(entries) == 1:
             backend = TorchBackend(
@@ -1052,8 +1043,7 @@ def main(argv=None):
             # entries: list of [path] or [path, weight]
             members = [
                 (
-                    TorchBackend(e[0], device=args.device,
-                                 batch_size=args.batch_size),
+                    TorchBackend(e[0], device=args.device, batch_size=args.batch_size),
                     float(e[1]) if len(e) > 1 else 1.0,
                 )
                 for e in entries
@@ -1061,24 +1051,19 @@ def main(argv=None):
             backend = EnsembleBackend(members)
     else:
         print(
-            "[deem] DEEM_CHECKPOINT not set: using deterministic stub "
-            "(uniform logits)",
+            "[deem] DEEM_CHECKPOINT not set: using deterministic stub (uniform logits)",
             file=sys.stderr,
         )
         backend = StubBackend()
     n_orders = int(os.environ.get("DEEM_N_ORDERS", "1"))
     calibration = Calibration()
     if args.calibration:
-        calibration = Calibration.from_file(
-            args.calibration, key=args.calibration_key
-        )
+        calibration = Calibration.from_file(args.calibration, key=args.calibration_key)
     core = DeemCore(
         backend,
         calibration=calibration,
         model_id=args.model_id,
-        max_questions=int(
-            os.environ.get("DEEM_MAX_QUESTIONS", "64")
-        ),
+        max_questions=int(os.environ.get("DEEM_MAX_QUESTIONS", "64")),
         n_orders=n_orders,
     )
     server = make_server(core, args.host, args.port)

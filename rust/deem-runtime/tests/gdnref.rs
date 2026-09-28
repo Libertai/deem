@@ -2,8 +2,16 @@ use deem_runtime::layers::gated_delta_rule;
 
 /// Reference: the original scalar chunked scan (pre-optimization).
 fn gdn_ref(
-    q: &mut [f32], k: &mut [f32], v: &[f32], beta: &[f32], g: &[f32],
-    t: usize, num_heads: usize, dk: usize, dv: usize, chunk_size: usize,
+    q: &mut [f32],
+    k: &mut [f32],
+    v: &[f32],
+    beta: &[f32],
+    g: &[f32],
+    t: usize,
+    num_heads: usize,
+    dk: usize,
+    dv: usize,
+    chunk_size: usize,
 ) -> Vec<f32> {
     let scale = 1.0f32 / (dk as f32).sqrt();
     for p in 0..t {
@@ -41,7 +49,9 @@ fn gdn_ref(
         }
         for c in 0..num_chunks {
             let cs = c * chunk_size;
-            if cs >= t { break; }
+            if cs >= t {
+                break;
+            }
             let getk = |p: usize, d: usize| kh[p * dk + d];
             let getq = |p: usize, d: usize| qh[p * dk + d];
             let getv = |p: usize, d: usize| vh[p * dv + d];
@@ -52,7 +62,11 @@ fn gdn_ref(
                 cum_decay[i] = cum_last;
             }
             let e_cum: Vec<f32> = cum_decay.iter().map(|x| x.exp() as f32).collect();
-            let kd: Vec<f32> = cum_decay.iter().map(|x| (cum_last - x) as f32).map(|x| x.exp()).collect();
+            let kd: Vec<f32> = cum_decay
+                .iter()
+                .map(|x| (cum_last - x) as f32)
+                .map(|x| x.exp())
+                .collect();
             let mut ut_strict = vec![0.0f32; chunk_size * chunk_size];
             let mut intra = vec![0.0f32; chunk_size * chunk_size];
             let mut v_beta = vec![0.0f32; chunk_size * dv];
@@ -150,7 +164,9 @@ fn solve(rhs: &mut [f32], lower: &[f32], n: usize, m: usize) {
         let row = &lower[i * n..(i + 1) * n];
         for kk in 0..i {
             let r = row[kk];
-            if r == 0.0 { continue; }
+            if r == 0.0 {
+                continue;
+            }
             for j in 0..m {
                 rhs[i * m + j] -= r * rhs[kk * m + j];
             }
@@ -166,7 +182,9 @@ thread_local! {
 fn rnd() -> f32 {
     RNG.with(|r| {
         let mut v = r.get();
-        v = v.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        v = v
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         r.set(v);
         ((v >> 33) as u32 as f32 / u32::MAX as f32) * 2.0 - 1.0
     })
@@ -199,9 +217,18 @@ fn gdn_matches_reference() {
             wi = i;
         }
     }
-    println!("worst={worst} at {wi} (p={} h={} d={})", wi / (num_heads * dv), (wi / dv) % num_heads, wi % dv);
+    println!(
+        "worst={worst} at {wi} (p={} h={} d={})",
+        wi / (num_heads * dv),
+        (wi / dv) % num_heads,
+        wi % dv
+    );
     println!("got={:.6} want={:.6}", got[wi], want[wi]);
-    assert!(worst < 5e-3, "worst diff {worst} (t={})", T.with(|v| v.get()));
+    assert!(
+        worst < 5e-3,
+        "worst diff {worst} (t={})",
+        T.with(|v| v.get())
+    );
 }
 
 #[test]

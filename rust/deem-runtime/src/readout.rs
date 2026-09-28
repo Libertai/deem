@@ -10,11 +10,8 @@ pub struct Readout {
 
 impl Readout {
     pub fn load(dir: &std::path::Path, quantize: bool) -> Result<Self, String> {
-        let model = crate::model::load_model(
-            dir,
-            crate::model::LoadOptions { quantize },
-        )
-        .map_err(|e| e.to_string())?;
+        let model = crate::model::load_model(dir, crate::model::LoadOptions { quantize })
+            .map_err(|e| e.to_string())?;
         let tokenizer = Tokenizer::load(dir)?;
         Ok(Readout { model, tokenizer })
     }
@@ -30,18 +27,11 @@ impl Readout {
     /// Batched variant: one forward pass per prompt (promps are per-question
     /// rows; callers batch at the HTTP layer).
     pub fn slot_logits_batch(&self, prompts: &[&str]) -> Vec<(Vec<f32>, usize)> {
-        prompts
-            .iter()
-            .map(|p| self.slot_logits(p))
-            .collect()
+        prompts.iter().map(|p| self.slot_logits(p)).collect()
     }
 
     /// Read letter logits from precomputed hidden states at `position`.
-    pub fn letter_logits_from_hidden(
-        &self,
-        hidden: &[f32],
-        position: usize,
-    ) -> (Vec<f32>, usize) {
+    pub fn letter_logits_from_hidden(&self, hidden: &[f32], position: usize) -> (Vec<f32>, usize) {
         let hidden_size = self.model.config.hidden_size;
         let h = &hidden[position * hidden_size..(position + 1) * hidden_size];
         let head = &self.model.head;

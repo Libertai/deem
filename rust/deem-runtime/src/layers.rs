@@ -21,10 +21,8 @@ pub fn exp_fast(x: f32) -> f32 {
     let n = t.round();
     let r = t - n;
     // 2^r, |r| <= 0.5 (Taylor / minimax, degree 5)
-    let p = 1.0
-        + r * (0.6931472
-            + r * (0.2402265
-                + r * (0.0555041 + r * (0.0096181 + r * 0.0013322))));
+    let p =
+        1.0 + r * (0.6931472 + r * (0.2402265 + r * (0.0555041 + r * (0.0096181 + r * 0.0013322))));
     let n = n as i32;
     // scale by 2^n via exponent bits (valid for -126 <= n <= 127)
     if !((-126..=127).contains(&n)) {
@@ -171,8 +169,7 @@ impl Linear {
             let row = &q[o * in_features..(o + 1) * in_features];
             for b in 0..nb {
                 let be = ((b + 1) * BLK).min(in_features);
-                sums[o * nb + b] =
-                    row[b * BLK..be].iter().map(|v| *v as i32).sum();
+                sums[o * nb + b] = row[b * BLK..be].iter().map(|v| *v as i32).sum();
             }
         }
         Linear {
@@ -188,7 +185,10 @@ impl Linear {
 
     /// int8 weights [out, in] (quantized path only)
     pub fn w_q(&self) -> &[i8] {
-        self.weights_i8.as_ref().map(|v| v.as_slice()).unwrap_or(&[])
+        self.weights_i8
+            .as_ref()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// per-(row, block) dequant scales
@@ -225,8 +225,10 @@ impl Linear {
                 }
             }
             // no AVX-512 BF16: dequantize once (not expected in practice)
-            let w: Vec<f32> =
-                b.iter().map(|v| f32::from_bits((*v as u32) << 16)).collect();
+            let w: Vec<f32> = b
+                .iter()
+                .map(|v| f32::from_bits((*v as u32) << 16))
+                .collect();
             return gemm_f32(x, &w, t, self.out_features, self.in_features);
         }
         if let Some(w) = &self.weights_f32 {
@@ -483,20 +485,11 @@ pub fn full_attention_forward(
         }
         // out_b = P @ V
         let mut out = vec![0.0f32; rows * hd];
-        crate::kernels::scan::gemm_nn(
-            &sc,
-            kend,
-            &vbuf[kv_head],
-            hd,
-            rows,
-            hd,
-            kend,
-            &mut out,
-            hd,
-        );
+        crate::kernels::scan::gemm_nn(&sc, kend, &vbuf[kv_head], hd, rows, hd, kend, &mut out, hd);
         let dst = unsafe {
             std::slice::from_raw_parts_mut(
-                attn_ptr.load(std::sync::atomic::Ordering::Relaxed)
+                attn_ptr
+                    .load(std::sync::atomic::Ordering::Relaxed)
                     .add((p0 * h + head) * hd),
                 rows * h * hd,
             )
@@ -564,9 +557,7 @@ pub fn gated_delta_rule(
             && std::arch::is_x86_feature_detected!("avx512bw")
         {
             return unsafe {
-                gated_delta_rule_avx512(
-                    q, k, v, beta, g, t, num_heads, dk, dv, chunk_size,
-                )
+                gated_delta_rule_avx512(q, k, v, beta, g, t, num_heads, dk, dv, chunk_size)
             };
         }
     }
@@ -768,12 +759,8 @@ fn gated_delta_rule_base(
                     }
                 }
 
-                let new_values = crate::kernels::scan::solve_tri_copy(
-                    &v_beta,
-                    &ut_strict,
-                    chunk_size,
-                    dv,
-                );
+                let new_values =
+                    crate::kernels::scan::solve_tri_copy(&v_beta, &ut_strict, chunk_size, dv);
                 let new_values = new_values;
                 let k_cumdecay = crate::kernels::scan::solve_tri_copy(
                     &decayed_k_beta,
@@ -820,27 +807,9 @@ fn gated_delta_rule_base(
                 for v in out_chunk.iter_mut() {
                     *v = 0.0;
                 }
+                crate::kernels::scan::gemm_nn(&qec, dk, &s, dv, chunk_size, dv, dk, out_chunk, dv);
                 crate::kernels::scan::gemm_nn(
-                    &qec,
-                    dk,
-                    &s,
-                    dv,
-                    chunk_size,
-                    dv,
-                    dk,
-                    out_chunk,
-                    dv,
-                );
-                crate::kernels::scan::gemm_nn(
-                    &intra,
-                    chunk_size,
-                    &v_new,
-                    dv,
-                    chunk_size,
-                    dv,
-                    chunk_size,
-                    out_chunk,
-                    dv,
+                    &intra, chunk_size, &v_new, dv, chunk_size, dv, chunk_size, out_chunk, dv,
                 );
 
                 // S = S * chunk_decay + (k*kd)^T @ v_new
@@ -855,20 +824,11 @@ fn gated_delta_rule_base(
                     *v = 0.0;
                 }
                 crate::kernels::scan::gemm_nn(
-                    &khts,
-                    chunk_size,
-                    &v_new,
-                    dv,
-                    dk,
-                    dv,
-                    chunk_size,
-                    &mut upd,
-                    dv,
+                    &khts, chunk_size, &v_new, dv, dk, dv, chunk_size, &mut upd, dv,
                 );
                 for i in 0..dk * dv {
                     s[i] = s[i] * chunk_decay + upd[i];
                 }
-
             }
             out_h
         })
@@ -884,4 +844,3 @@ fn gated_delta_rule_base(
     }
     out
 }
-

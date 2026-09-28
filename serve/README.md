@@ -210,16 +210,25 @@ export TYPESAFE_API_KEY=local   # any non-empty value
 ```python
 from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
-client = TypeSafeClient(api_key="local", base_url="http://127.0.0.1:8300",
-                        model="deem-1.5")
-resp = client.system_one("Help! My payouts have been failing for 3 days.", {
-    "urgent": Noul(instructions="Is this urgent?",
-                   criteria={"true": "Time-sensitive", "false": "No urgency"}),
-    "team": Choice(instructions="Which team?",
-                   criteria={"technical": "Bugs, outages", "billing": None}),
-    "mood": Score(instructions="Customer mood?",
-                  criteria=["Calm", "Frustrated", "Very angry"]),
-})
+client = TypeSafeClient(
+    api_key="local", base_url="http://127.0.0.1:8300", model="deem-1.5"
+)
+resp = client.system_one(
+    "Help! My payouts have been failing for 3 days.",
+    {
+        "urgent": Noul(
+            instructions="Is this urgent?",
+            criteria={"true": "Time-sensitive", "false": "No urgency"},
+        ),
+        "team": Choice(
+            instructions="Which team?",
+            criteria={"technical": "Bugs, outages", "billing": None},
+        ),
+        "mood": Score(
+            instructions="Customer mood?", criteria=["Calm", "Frustrated", "Very angry"]
+        ),
+    },
+)
 ```
 
 Put auth in front of the server at the proxy/gateway if you expose it.
