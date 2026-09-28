@@ -225,7 +225,11 @@ pub fn gemm_f32(a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Vec<f32> 
     out
 }
 
-/// out[m, n] = a[m, k] @ diag(scale) @ b_q^T, b_q is [n, k] int8.
+/// Weight elements per scale in `gemm_i8`; must match `Linear::quantize`.
+pub const I8_WEIGHT_BLK: usize = 128;
+
+/// out[m, n] = a[m, k] @ dequant(b_q)^T, b_q is [n, k] int8 with one scale
+/// per (row, I8_WEIGHT_BLK-element block): `scales` is [n, k.div_ceil(BLK)].
 ///
 /// Each weight-row block is dequantized once into an L2-resident scratch
 /// buffer, then dotted against every activation row (conversion amortized).
@@ -246,21 +250,21 @@ pub fn gemm_i8(
             let nb0 = nblk * NB;
             let nb0 = nb0;
             let nb1 = (nb0 + NB).min(n);
+            let blocks = k.div_ceil(I8_WEIGHT_BLK);
             let mut scratch = vec![0f32; NB * k];
-            for (dst, src) in scratch
-                .iter_mut()
-                .zip(b_q[nb0 * k..nb1 * k].iter())
-            {
-                *dst = *src as f32;
+            for (bi, i) in (nb0..nb1).enumerate() {
+                let q = &b_q[i * k..(i + 1) * k];
+                let dst = &mut scratch[bi * k..(bi + 1) * k];
+                for (kk, (d, v)) in dst.iter_mut().zip(q).enumerate() {
+                    *d = *v as f32 * scales[i * blocks + kk / I8_WEIGHT_BLK];
+                }
             }
             for mi in 0..m {
                 let arow = a.get_unchecked(mi * k..mi * k + k);
                 let orow = out_ptr as *mut f32;  // indexed below
                 for (bi, i) in (nb0..nb1).enumerate() {
-                    *orow.add(mi * n + i) = simd::dot_f32(
-                        arow,
-                        scratch.get_unchecked(bi * k..bi * k + k),
-                    ) * *scales.get_unchecked(i);
+                    *orow.add(mi * n + i) =
+                        simd::dot_f32(arow, scratch.get_unchecked(bi * k..bi * k + k));
                 }
             }
         });
@@ -653,6 +657,28 @@ mod tests {
                 }
                 assert!((out[i * n + j] - want).abs() < 1e-4);
             }
+        }
+    }
+
+    #[test]
+    fn gemm_i8_uses_block_scales() {
+        let m = 3;
+        let n = 5;
+        let k = 300;
+        let a: Vec<f32> = (0..m * k).map(|i| ((i * 7 % 23) as f32) * 0.1 - 1.0).collect();
+        // Rows and blocks with very different magnitudes, so a per-row scale
+        // cannot reproduce them.
+        let w: Vec<f32> = (0..n * k)
+            .map(|i| ((i * 13 % 17) as f32 - 8.0) * (1.0 + (i % k / I8_WEIGHT_BLK) as f32 * 10.0))
+            .collect();
+        let lin = crate::layers::Linear::quantize(&w, n, k);
+        let got = gemm_i8(&a, lin.w_q(), lin.scales(), m, n, k);
+        let want = gemm_f32(&a, &w, m, n, k);
+        let a_abs: Vec<f32> = a.iter().map(|x| x.abs()).collect();
+        let w_abs: Vec<f32> = w.iter().map(|x| x.abs()).collect();
+        let magnitude = gemm_f32(&a_abs, &w_abs, m, n, k);
+        for ((g, e), mag) in got.iter().zip(&want).zip(&magnitude) {
+            assert!((g - e).abs() <= 0.01 * mag, "{g} vs {e} (|a||w| {mag})");
         }
     }
 }

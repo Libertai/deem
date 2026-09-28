@@ -146,7 +146,7 @@ impl Linear {
         let mut q = vec![0i8; w.len()];
         // per-(row, k-block) weight scales (block size must match
         // kernels::i8t::BLK)
-        const BLK0: usize = 128;
+        const BLK0: usize = crate::kernels::I8_WEIGHT_BLK;
         let nb0 = in_features.div_ceil(BLK0);
         let mut scales = vec![0f32; out_features * nb0];
         for o in 0..out_features {
@@ -191,7 +191,7 @@ impl Linear {
         self.weights_i8.as_ref().map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    /// per-row dequant scales
+    /// per-(row, block) dequant scales
     pub fn scales(&self) -> &[f32] {
         self.scales.as_ref().map(|v| v.as_slice()).unwrap_or(&[])
     }
