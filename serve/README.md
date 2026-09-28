@@ -12,7 +12,7 @@ real-checkpoint backend.
 |---|---|
 | `deem_server.py` | HTTP server: `POST /v1/systemone`, `GET /v1/models`, `GET /health` |
 | `deem_mcp.py` | MCP server (JSON-RPC 2.0 over stdio, no MCP SDK): `classify` / `score` / `check` |
-| `tests/` | 52 tests: validation, response shape, confidence formula, batching, temperature, error paths, MCP dispatch + stdio round-trip |
+| `tests/` | validation, TypeSafe criteria + prompt rendering, response shape, confidence formula, batching, temperature, error paths, MCP dispatch + stdio round-trip |
 
 ## Quickstart
 
@@ -45,10 +45,14 @@ curl http://127.0.0.1:8300/v1/systemone \
     "state": "Deploy box prod-1: build #4021 green, 3 unit tests flaky, Friday 16:55.",
     "questions": {
       "ship_it": {"type": "choice", "instructions": "What should we do?",
-                   "options": ["deploy", "hold", "rollback"]},
+                   "criteria": {"deploy": "Ship build #4021 now",
+                                "hold": "Wait until Monday",
+                                "rollback": null}},
       "risk":    {"type": "score", "instructions": "Rate the release risk.",
-                   "levels": ["low", "medium", "high"]},
-      "flaky":   {"type": "noul", "instructions": "The failure is a flake."}
+                   "criteria": ["low", "medium", "high"]},
+      "flaky":   {"type": "noul", "instructions": "Are the failures flakes?",
+                   "criteria": {"true": "Tests fail intermittently",
+                                "false": "A real regression"}}
     }
   }'
 ```
@@ -57,51 +61,73 @@ Response:
 
 ```json
 {
-  "id": "deem-fe4a5e6380a74c36a601bd5e",
-  "object": "systemone.completion",
-  "created": 1789979550,
   "model": "deem-1.5",
   "answers": {
     "ship_it": {"type": "choice", "choice": "deploy",
                 "probabilities": {"deploy": 0.86, "hold": 0.11, "rollback": 0.03},
-                "confidence": 0.79, "temperature": 0.9888},
-    "risk":    {"type": "score", "level": "medium",
-                "probabilities": {"low": 0.22, "medium": 0.61, "high": 0.17},
-                "expected": 0.95, "confidence": 0.42, "temperature": 3.1187},
-    "flaky":   {"type": "noul", "value": 0.83, "confidence": 0.66,
-                "temperature": 4.3325}
+                "confidence": 0.79, "x_temperature": 0.9888},
+    "risk":    {"type": "score", "score": 0.95,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+                "probabilities": {"0": 0.22, "1": 0.61, "2": 0.17},
+                "confidence": 0.42, "x_temperature": 3.1187},
+    "flaky":   {"type": "noul", "noul": 0.83, "x_confidence": 0.66,
+                "x_temperature": 4.3325}
   },
-  "usage": {"prompt_tokens": 84, "completion_tokens": 0,
-            "total_tokens": 84, "questions": 3}
+  "usage": {"input_tokens": 84, "output_tokens": 0}
 }
 ```
 
-Contract:
+Contract (TypeSafe `/v1/systemone`):
 
 - **state** — any JSON value (string, object, …); serialized canonically
   and hardened against `</state>` injection (see `src/deem/format.py`).
-- **questions** — object keyed by question id (or a list of objects with
-  an `id` field). Per question:
-  - `choice`: `options` (2–255 unique strings),
-  - `score`: `levels` (2–10 unique strings, low → high),
-  - `noul`: just `instructions` (the proposition).
+- **questions** — object keyed by question id. Per question:
+  - `instructions`: string (verbatim) or object/array (rendered as
+    canonical JSON); optional, missing → empty.
+  - `choice`: `criteria` maps each option (2–255 unique, non-empty, no
+    newlines; order kept) to a description or `null`. Descriptions are
+    rendered into the prompt as `(A) option: description`.
+  - `score`: `criteria` is the list of 2–10 levels, low → high.
+  - `noul`: optional `criteria` `{"true": ..., "false": ...}` (either side
+    optional), rendered as `True if: ...` / `False if: ...` lines.
+  - Non-string descriptions / levels / noul criteria render as canonical
+    JSON; newlines inside them become spaces.
   - optional `dataset`: calibration-temperature key for this question.
+- Legacy aliases still accepted: `options` / `levels` string lists instead
+  of `criteria`, and `questions` as a list of objects with an `id` field.
+  A top-level `model` is accepted and ignored; optional top-level
+  `dataset` applies to all questions lacking their own. At most
+  `DEEM_MAX_QUESTIONS` (64) questions per request.
+- Answers: choice `{choice, probabilities, confidence}`; score
+  `{score, legend, probabilities, confidence}` where `score` is the
+  expected 0-based level index and `probabilities` / `legend` are keyed
+  `"0"`..`"n-1"`; noul `{noul}`. Non-spec fields carry an `x_` prefix
+  (`x_temperature`, noul `x_confidence`). Usage is
+  `{"input_tokens", "output_tokens": 0}`.
 - `confidence` is derived from the calibrated distribution:
   `(N·pmax − 1)/(N−1)` (0 for uniform, 1 for point mass); for noul it is
   the same formula on the binary {p, 1−p} distribution, i.e. `2·pmax − 1`.
 - The `torch` backend reads single-token letters only, so it supports at
-  most 26 options per question (documented caveat in `format.py`; multi-
-  token letter readout `AA`, `AB`, … is a training-lane follow-up).
-- Optional top-level `dataset` applies to all questions lacking their own.
+  most 26 options per question (TypeSafe allows 255; more than 26 is a
+  422 on `criteria`). Multi-token letter readout `AA`, `AB`, … is a
+  training-lane follow-up (see `format.py`).
 
-Errors: `{"error": {"message", "type", "code"}}` with 400 (validation),
-404, 405, 413, 500 (backend).
+Errors: validation failures are **422** with a FastAPI-style body
+
+```json
+{"detail": [{"loc": ["body", "questions", "risk", "criteria"],
+             "msg": "needs 2-10 entries, got 1", "type": "value_error"}]}
+```
+
+(invalid JSON: `"type": "json_invalid"`, `"loc": ["body"]`). Everything
+else — 404, 405, 413 (body over 8 MB), 500 (backend) — is
+`{"detail": {"error_type": "...", "message": "..."}}`.
 
 ### GET /v1/models
 
 ```json
-{"object": "list",
- "data": [{"id": "deem-1.5", "object": "model", "created": 0, "owned_by": "deem"}]}
+{"models": [{"name": "deem-1.5", "description": "Deem typed decision model",
+             "release_date": ""}]}
 ```
 
 ### GET /health
@@ -172,16 +198,32 @@ EOF
 
 ## SDK compatibility
 
-decider-2b proved the official `typesafe-sdk` works drop-in against a
-custom `/v1/systemone` endpoint. Point it at this server:
+The official TypeSafe SDKs (checked: Python `typesafe-sdk` 0.7.2) work
+against this server. The server ignores auth, but the SDKs refuse to
+start without an API key, so pass any non-empty one plus the base URL:
 
 ```bash
 export TYPESAFE_BASE_URL=http://127.0.0.1:8300
+export TYPESAFE_API_KEY=local   # any non-empty value
 ```
 
-That is the only environment variable needed for the official Python/JS
-SDKs — no auth is required (it is a self-hosted server; put auth in front
-of it at the proxy/gateway if you expose it).
+```python
+from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+
+client = TypeSafeClient(api_key="local", base_url="http://127.0.0.1:8300",
+                        model="deem-1.5")
+resp = client.system_one("Help! My payouts have been failing for 3 days.", {
+    "urgent": Noul(instructions="Is this urgent?",
+                   criteria={"true": "Time-sensitive", "false": "No urgency"}),
+    "team": Choice(instructions="Which team?",
+                   criteria={"technical": "Bugs, outages", "billing": None}),
+    "mood": Score(instructions="Customer mood?",
+                  criteria=["Calm", "Frustrated", "Very angry"]),
+})
+```
+
+Put auth in front of the server at the proxy/gateway if you expose it.
+Conformance: `uvx jevcompat test http://127.0.0.1:8300`.
 
 ## MCP server
 
@@ -202,9 +244,10 @@ of it at the proxy/gateway if you expose it).
 ```
 
 Tools: `classify(state, instructions, options)` → choice + probabilities
-+ confidence; `score(state, instructions, levels)` → level distribution +
-expected score + confidence; `check(state, instructions)` → probability
-the proposition is true. Use `--stub` for the deterministic stub. It shares
++ confidence; `score(state, instructions, levels)` → expected level index
+(`score`) + `legend` + index-keyed distribution + confidence;
+`check(state, instructions)` → `noul`, the probability the proposition is
+true. Answers use the same TypeSafe shapes as the HTTP server. Use `--stub` for the deterministic stub. It shares
 `DeemCore` with the HTTP server, so both lanes answer identically.
 
 ## Deployment (systemd)
@@ -257,11 +300,12 @@ systemctl daemon-reload && systemctl enable --now deem-serve
 ## Tests
 
 ```bash
-.venv/bin/pytest serve/tests/ -q   # 52 passed
+.venv/bin/pytest serve/tests/ -q
 ```
 
-Covers request validation (option/level count limits, malformed JSON,
-unknown types, duplicate ids), response shape for all three primitives,
+Covers request validation (option/level count limits, criteria shapes,
+malformed JSON, unknown types, duplicate ids, 422 `detail` shape),
+TypeSafe criteria rendering, response shape for all three primitives,
 the derived-confidence formula, per-question isolation and batching,
 per-dataset/per-primitive temperature application, all HTTP error paths
-(400/404/405/500), MCP dispatch, and a stdio subprocess round-trip.
+(404/405/413/422/500), MCP dispatch, and a stdio subprocess round-trip.

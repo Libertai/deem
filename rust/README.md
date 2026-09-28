@@ -49,12 +49,12 @@ Measured 2026-09-24 on a **heavily contended** Ryzen 9950X (other training
 | bf16 (tiled, vdpbf16ps) | 181 ms | 385 ms | 2.5 s |
 | f32 (AVX-512 dot) | — | 434 ms | 2.6 s |
 
-`quantize: true` runs the int8 path: weights int8 with per-row scales,
+`quantize: true` (default; `DEEM_QUANTIZE=0` or `false` disables it) runs the int8 path: weights int8 with per-row scales,
 activations quantized once per row-group to offset-encoded u8 with
 per-512-element-block scales (Q8_0-style), 4x6 register-blocked tiles of
 `vpdpbusd` with per-block offset correction. **~3.4 TFLOPs/s** isolated
 (zero quality-loss flags; passes the 0.35 letter-logit parity gate).
-`quantize: false` (default) loads weights straight from the checkpoint's
+`quantize: false` loads weights straight from the checkpoint's
 bf16 (exact, 1.6 GB resident) and runs the same tile structure with
 `vdpbf16ps` (~1.5 TFLOPs/s). Without AVX-512 BF16/VNNI both fall back
 to f32 automatically.
@@ -193,14 +193,30 @@ DEEM_PORT=8300 \
     ./target/release/deem-server
 ```
 
-Wire-compatible with `serve/deem_server.py`: `POST /v1/systemone`,
-`GET /v1/models`, `GET /health`; per-question isolation rows, per-dataset /
+| Variable | Default | |
+|---|---|---|
+| `DEEM_CHECKPOINT` | *(required)* | HF checkpoint dir |
+| `DEEM_CALIBRATION` / `DEEM_CALIBRATION_KEY` | *(unset → T=1)* | calibration JSON / version key |
+| `DEEM_MODEL_ID` | `deem-0.8` | reported by the API |
+| `DEEM_HOST` / `DEEM_PORT` | `127.0.0.1` / `8300` | bind address |
+| `DEEM_QUANTIZE` | `true` | int8 weights; `0` / `false` loads bf16 |
+
+Wire-compatible with `serve/deem_server.py` and TypeSafe's
+`/v1/systemone` (see `serve/README.md` for the contract): `POST
+/v1/systemone` with TypeSafe `criteria` (legacy `options` / `levels`
+accepted), `GET /v1/models` (`{"models": [...]}`), `GET /health`; answers
+`noul` / `choice` / `score` + `legend`, usage `input_tokens`, 422
+`detail[]` validation errors. Choice descriptions and noul criteria are
+rendered into the prompt. Per-question isolation rows, per-dataset /
 per-primitive calibration temperatures, derived confidence
-`(N·pmax − 1)/(N − 1)`, noul `2·pmax − 1`.
+`(N·pmax − 1)/(N − 1)`, noul `2·pmax − 1`. The official TypeSafe SDKs
+work with any non-empty `api_key` and `base_url` / `TYPESAFE_BASE_URL`
+pointing at the server.
 
 Caveats / TODO:
 
 - single order per choice (no `DEEM_N_ORDERS` averaging yet — the eval
   harness covers both orders offline)
-- 26-option cap (single-token letters), same as the torch backend
+- 26-option cap (single-token letters; TypeSafe allows 255), same as the
+  torch backend — larger choice questions get a 422
 - ensemble backends not supported (single checkpoint)
