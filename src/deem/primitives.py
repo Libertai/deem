@@ -56,12 +56,16 @@ class DeemError(ValueError):
     """Raised when a Deem value object is constructed with invalid data."""
 
 
-def _check_text(value: object, name: str) -> str:
+def _check_text(value: object, name: str, allow_empty: bool = False) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be str, got {type(value).__name__}")
-    if not value:
+    if not value and not allow_empty:
         raise DeemError(f"{name} must be a non-empty string")
     return value
+
+
+def _check_instructions(value: object) -> str:
+    return _check_text(value, "instructions", allow_empty=True)
 
 
 def _check_labels(
@@ -97,15 +101,21 @@ class ChoiceQuestion:
 
     ``criteria`` is free-form metadata (e.g. ``{"max_latency_s": 30}``); it
     never appears in the rendered prompt.
+
+    ``descriptions`` is parallel to ``options``: entry *i* describes
+    ``options[i]`` and is rendered as ``(A) option: description``; ``None``
+    entries (and ``descriptions=None``) render the bare ``(A) option``.
+    Non-string entries render as canonical JSON.
     """
 
     instructions: str
     options: list
     criteria: Optional[dict] = None
+    descriptions: Optional[list] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "instructions", _check_text(self.instructions, "instructions")
+            self, "instructions", _check_instructions(self.instructions)
         )
         object.__setattr__(
             self, "options", _check_labels(self.options, "options", 2, MAX_OPTIONS)
@@ -114,17 +124,35 @@ class ChoiceQuestion:
             if not isinstance(self.criteria, dict):
                 raise TypeError("criteria must be a dict or None")
             object.__setattr__(self, "criteria", dict(self.criteria))
+        if self.descriptions is not None:
+            if isinstance(self.descriptions, str) or not isinstance(
+                self.descriptions, (list, tuple)
+            ):
+                raise TypeError("descriptions must be a list or None")
+            if len(self.descriptions) != len(self.options):
+                raise DeemError(
+                    f"descriptions must have one entry per option "
+                    f"({len(self.options)}), got {len(self.descriptions)}"
+                )
+            object.__setattr__(self, "descriptions", list(self.descriptions))
 
 
 @dataclass(frozen=True)
 class NoulQuestion:
-    """Probability that a proposition is true. Read out as a value in [0, 1]."""
+    """Probability that a proposition is true. Read out as a value in [0, 1].
+
+    ``if_true`` / ``if_false`` are optional criteria rendered as
+    ``True if: ...`` / ``False if: ...`` lines; non-string values render as
+    canonical JSON.
+    """
 
     instructions: str
+    if_true: object = None
+    if_false: object = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "instructions", _check_text(self.instructions, "instructions")
+            self, "instructions", _check_instructions(self.instructions)
         )
 
 
@@ -142,7 +170,7 @@ class ScoreQuestion:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "instructions", _check_text(self.instructions, "instructions")
+            self, "instructions", _check_instructions(self.instructions)
         )
         object.__setattr__(
             self, "levels", _check_labels(self.levels, "levels", 2, MAX_LEVELS)

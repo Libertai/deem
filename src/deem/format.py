@@ -18,11 +18,16 @@ Prompt layout (see the canonical snapshot in ``tests/helpers.py``)::
     Question 1: {instructions}
     Options:
     (A) {option}
-    (B) {option}
+    (B) {option}: {description}
     Answer 1: (
 
     Question 2: {noul instructions}
+    True if: {criterion}
+    False if: {criterion}
     Answer 2: (
+
+Option descriptions and the ``True if`` / ``False if`` lines appear only
+when the question carries them.
 
 The trailing ``Answer k: (`` is the answer *slot*: generation stops there and
 the hidden state at that position is read out against the option-letter rows
@@ -90,6 +95,8 @@ __all__ = [
     "letter_for_index",
     "index_for_letter",
     "render_state",
+    "render_text",
+    "render_inline",
     "build_prompt",
     "prompt_hash",
     "read_answers",
@@ -223,14 +230,30 @@ def render_state(state: State) -> str:
     state shares one byte-identical serialization for prefix/KV-cache reuse.
     """
     try:
-        serialized = json.dumps(
-            state, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
+        return _canonical_json(state)
     except TypeError as exc:
         raise TypeError(
             f"state must be a str or JSON-serializable, got: {exc}"
         ) from None
-    return _harden(serialized)
+
+
+def _canonical_json(value) -> str:
+    return _harden(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    )
+
+
+def render_text(value) -> str:
+    """Prompt text for a free-form value (instructions, option descriptions,
+    levels, noul criteria): strings verbatim, anything else as canonical JSON
+    (the :func:`render_state` serialization)."""
+    return value if isinstance(value, str) else _canonical_json(value)
+
+
+def render_inline(value) -> str:
+    """:func:`render_text` for text inside the line-oriented option /
+    criteria block, where a newline would end the entry early."""
+    return render_text(value).replace("\r", " ").replace("\n", " ")
 
 
 def _validate_permutation(perm: Sequence, n: int, qid: str) -> list:
@@ -244,7 +267,7 @@ def _validate_permutation(perm: Sequence, n: int, qid: str) -> list:
     return perm
 
 
-def _displayed_labels(question, qid: str, perm: Optional[Sequence]) -> list:
+def _option_lines(question, qid: str, perm: Optional[Sequence]) -> list:
     labels = (
         question.options
         if isinstance(question, ChoiceQuestion)
@@ -258,10 +281,31 @@ def _displayed_labels(question, qid: str, perm: Optional[Sequence]) -> list:
                 f"permutation given for {qid!r}, which has no options"
             )
         return []
-    if perm is None:
-        return list(labels)
-    perm = _validate_permutation(perm, len(labels), qid)
-    return [labels[i] for i in perm]
+    order = (
+        list(range(len(labels)))
+        if perm is None
+        else _validate_permutation(perm, len(labels), qid)
+    )
+    descriptions = getattr(question, "descriptions", None) or [None] * len(labels)
+    lines = ["Options:"]
+    for i, original in enumerate(order):
+        entry = f"({letter_for_index(i)}) {labels[original]}"
+        description = descriptions[original]
+        if description is not None:
+            entry += f": {render_inline(description)}"
+        lines.append(entry)
+    return lines
+
+
+def _criteria_lines(question) -> list:
+    if not isinstance(question, NoulQuestion):
+        return []
+    lines = []
+    if question.if_true is not None:
+        lines.append(f"True if: {render_inline(question.if_true)}")
+    if question.if_false is not None:
+        lines.append(f"False if: {render_inline(question.if_false)}")
+    return lines
 
 
 def build_prompt(
@@ -296,11 +340,8 @@ def build_prompt(
     for k, (qid, question) in enumerate(question_set.items(), start=1):
         lines.append("")
         lines.append(f"Question {k}: {question.instructions}")
-        labels = _displayed_labels(question, qid, permutations.get(qid))
-        if labels:
-            lines.append("Options:")
-            for i, label in enumerate(labels):
-                lines.append(f"({letter_for_index(i)}) {label}")
+        lines.extend(_option_lines(question, qid, permutations.get(qid)))
+        lines.extend(_criteria_lines(question))
         lines.append(f"Answer {k}: (")
     return "\n".join(lines)
 
