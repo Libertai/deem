@@ -43,9 +43,7 @@ def negation_consistency_error(p_a, p_not_a) -> float:
     pa = _as_floats(p_a)
     pn = _as_floats(p_not_a)
     if len(pa) != len(pn):
-        raise ValueError(
-            f"p_a/p_not_a length mismatch: {len(pa)} != {len(pn)}"
-        )
+        raise ValueError(f"p_a/p_not_a length mismatch: {len(pa)} != {len(pn)}")
     if not pa:
         return 0.0
     total = sum(abs(a - (1.0 - n)) for a, n in zip(pa, pn))
@@ -85,9 +83,7 @@ def negation_paired_accuracy(p_a, p_not_a, ground_truth) -> dict:
     pn = _as_floats(p_not_a)
     gt = _as_floats(ground_truth)
     if not (len(pa) == len(pn) == len(gt)):
-        raise ValueError(
-            f"length mismatch: {len(pa)}/{len(pn)}/{len(gt)}"
-        )
+        raise ValueError(f"length mismatch: {len(pa)}/{len(pn)}/{len(gt)}")
     n = len(pa)
     if n == 0:
         return {

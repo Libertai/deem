@@ -80,9 +80,7 @@ def split_for(
     weights.
     """
     if len(ratios) != len(labels):
-        raise ValueError(
-            f"{len(labels)} labels but {len(ratios)} ratios"
-        )
+        raise ValueError(f"{len(labels)} labels but {len(ratios)} ratios")
     if any(r <= 0 for r in ratios):
         raise ValueError(f"ratios must be positive, got {ratios!r}")
     digest = split_hash(state, question, seed)

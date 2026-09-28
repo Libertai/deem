@@ -5,21 +5,20 @@ primitives, the letter-slot cross-encoder prompt builder, and debiasing
 scaffolding.  Python 3.10 stdlib only.
 """
 
-from .primitives import (
-    MAX_LEVELS,
-    MAX_OPTIONS,
-    ChoiceQuestion,
-    ChoiceResult,
-    NoulQuestion,
-    NoulResult,
-    QuestionSet,
-    DeemError,
-    ScoreQuestion,
-    ScoreResult,
+from .debias import (
+    CHOICE_TEMPLATES,
+    NOUL_TEMPLATES,
+    SCORE_TEMPLATES,
+    normalize,
+    pmi_prior,
+    pmi_probabilities,
+    templated_instructions,
+    templated_question,
+    templates_for,
 )
 from .format import (
-    LETTERS,
     LETTER_INDEX,
+    LETTERS,
     build_prompt,
     confidence_from_probabilities,
     index_for_letter,
@@ -33,16 +32,17 @@ from .format import (
     render_state,
     softmax,
 )
-from .debias import (
-    CHOICE_TEMPLATES,
-    NOUL_TEMPLATES,
-    SCORE_TEMPLATES,
-    normalize,
-    pmi_prior,
-    pmi_probabilities,
-    templated_instructions,
-    templated_question,
-    templates_for,
+from .primitives import (
+    MAX_LEVELS,
+    MAX_OPTIONS,
+    ChoiceQuestion,
+    ChoiceResult,
+    DeemError,
+    NoulQuestion,
+    NoulResult,
+    QuestionSet,
+    ScoreQuestion,
+    ScoreResult,
 )
 
 __version__ = "0.1.0"

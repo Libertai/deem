@@ -4,7 +4,6 @@ import json
 import math
 
 import pytest
-
 from serve_helpers import FixedBackend, get, live_server, post
 
 
@@ -103,7 +102,9 @@ def test_one_option_choice_422(base_url):
     status, body = post(
         base_url,
         systemone_url(),
-        one_question({"type": "choice", "instructions": "pick", "criteria": {"only": None}}),
+        one_question(
+            {"type": "choice", "instructions": "pick", "criteria": {"only": None}}
+        ),
     )
     assert_422(status, body, ["body", "questions", "q", "criteria"])
 
@@ -143,7 +144,11 @@ def test_eleven_levels_422(base_url):
         base_url,
         systemone_url(),
         one_question(
-            {"type": "score", "instructions": "rate", "criteria": [f"L{i}" for i in range(11)]}
+            {
+                "type": "score",
+                "instructions": "rate",
+                "criteria": [f"L{i}" for i in range(11)],
+            }
         ),
     )
     assert_422(status, body, ["body", "questions", "q", "criteria"])
@@ -172,7 +177,11 @@ def test_unknown_question_type_422(base_url):
         {"type": "choice", "instructions": "pick", "criteria": ["a", "b"]},
         {"type": "choice", "instructions": "pick"},
         {"type": "choice", "instructions": "pick", "criteria": {"a": None, " ": None}},
-        {"type": "choice", "instructions": "pick", "criteria": {"a": None, "b\nc": None}},
+        {
+            "type": "choice",
+            "instructions": "pick",
+            "criteria": {"a": None, "b\nc": None},
+        },
         {"type": "score", "instructions": "rate", "criteria": {"a": 1, "b": 2}},
         {"type": "score", "instructions": "rate", "criteria": ["same", "same"]},
         {"type": "score", "instructions": "rate"},
@@ -204,7 +213,9 @@ def test_duplicate_options_422(base_url):
     status, body = post(
         base_url,
         systemone_url(),
-        one_question({"type": "choice", "instructions": "pick", "options": ["same", "same"]}),
+        one_question(
+            {"type": "choice", "instructions": "pick", "options": ["same", "same"]}
+        ),
     )
     assert_422(status, body, ["body", "questions", "q", "criteria"])
 
@@ -300,20 +311,25 @@ def test_typesafe_criteria_request():
         '(A) technical: Bugs\n(B) billing\n(C) sales: {"x":1}\nAnswer 1: ('
     )
     assert mood.endswith(
-        'Options:\n(A) Calm\n(B) {"level":"Frustrated"}\n(C) Very angry\n'
-        "Answer 1: ("
+        'Options:\n(A) Calm\n(B) {"level":"Frustrated"}\n(C) Very angry\nAnswer 1: ('
     )
     assert list(body["answers"]["team"]["probabilities"]) == [
-        "technical", "billing", "sales",
+        "technical",
+        "billing",
+        "sales",
     ]
     assert body["answers"]["mood"]["legend"] == {
-        "0": "Calm", "1": '{"level":"Frustrated"}', "2": "Very angry",
+        "0": "Calm",
+        "1": '{"level":"Frustrated"}',
+        "2": "Very angry",
     }
 
 
 def test_legacy_and_criteria_render_identically():
     backend = FixedBackend()
-    legacy = one_question({"type": "choice", "instructions": "pick", "options": ["a", "b"]})
+    legacy = one_question(
+        {"type": "choice", "instructions": "pick", "options": ["a", "b"]}
+    )
     typesafe = one_question(
         {"type": "choice", "instructions": "pick", "criteria": {"a": None, "b": None}}
     )
@@ -336,7 +352,13 @@ def test_choice_response_shape(base_url):
     assert set(body["usage"]) == {"input_tokens", "output_tokens"}
     assert body["usage"]["output_tokens"] == 0
     answer = body["answers"]["deploy"]
-    assert set(answer) == {"type", "choice", "probabilities", "confidence", "x_temperature"}
+    assert set(answer) == {
+        "type",
+        "choice",
+        "probabilities",
+        "confidence",
+        "x_temperature",
+    }
     assert answer["type"] == "choice"
     assert answer["choice"] in ("deploy", "wait")
     assert set(answer["probabilities"]) == {"deploy", "wait"}
@@ -362,7 +384,12 @@ def test_score_response_shape(base_url):
     assert status == 200
     answer = body["answers"]["urgency"]
     assert set(answer) == {
-        "type", "score", "legend", "probabilities", "confidence", "x_temperature",
+        "type",
+        "score",
+        "legend",
+        "probabilities",
+        "confidence",
+        "x_temperature",
     }
     assert answer["type"] == "score"
     assert answer["score"] == pytest.approx(1.5)  # uniform over 4 levels
@@ -406,7 +433,12 @@ def test_list_form_questions(base_url):
                     "type": "noul",
                     "instructions": "prop",
                 },
-                {"qid": "b", "type": "score", "instructions": "rate", "levels": ["lo", "hi"]},
+                {
+                    "qid": "b",
+                    "type": "score",
+                    "instructions": "rate",
+                    "levels": ["lo", "hi"],
+                },
             ],
         },
     )
@@ -580,7 +612,9 @@ def test_temperature_flattens_distribution(tmp_path):
     cal_path.write_text('{"per_primitive": {"choice": 2.0}}')
     from deem_server import Calibration
 
-    with live_server(backend=backend, calibration=Calibration.from_file(cal_path)) as url:
+    with live_server(
+        backend=backend, calibration=Calibration.from_file(cal_path)
+    ) as url:
         status, body = post(url, systemone_url(), simple_payload())
         assert status == 200
         answer = body["answers"]["deploy"]
@@ -593,10 +627,12 @@ def test_temperature_flattens_distribution(tmp_path):
 def test_per_dataset_temperature_wins():
     from deem_server import Calibration
 
-    cal = Calibration.from_dict({
-        "per_primitive": {"choice": 1.0},
-        "per_dataset": {"ag_news": 4.0},
-    })
+    cal = Calibration.from_dict(
+        {
+            "per_primitive": {"choice": 1.0},
+            "per_dataset": {"ag_news": 4.0},
+        }
+    )
     backend = FixedBackend(fn=lambda p, n: [2.0, 0.0, 0.0])
     with live_server(backend=backend, calibration=cal) as url:
         status, body = post(

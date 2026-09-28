@@ -3,9 +3,8 @@
 import math
 
 import pytest
-
-from serve_helpers import FixedBackend
 from deem_server import BackendError, Calibration
+from serve_helpers import FixedBackend
 
 
 def test_flat_primitive_temperatures():
@@ -16,13 +15,15 @@ def test_flat_primitive_temperatures():
 
 
 def test_per_primitive_nested_shape():
-    cal = Calibration.from_dict({
-        "per_primitive": {
-            "choice": {"temperature": 0.99},
-            "noul": {"temperature": 4.33},
-            "score": {"temperature": 3.12},
+    cal = Calibration.from_dict(
+        {
+            "per_primitive": {
+                "choice": {"temperature": 0.99},
+                "noul": {"temperature": 4.33},
+                "score": {"temperature": 3.12},
+            }
         }
-    })
+    )
     assert cal.temperature_for("choice") == 0.99
     assert cal.temperature_for("noul") == 4.33
 
@@ -50,10 +51,12 @@ def test_temperature_v4_json_shape():
 
 
 def test_dataset_overrides_primitive():
-    cal = Calibration.from_dict({
-        "per_primitive": {"choice": 2.0},
-        "per_dataset": {"ag_news": 5.0},
-    })
+    cal = Calibration.from_dict(
+        {
+            "per_primitive": {"choice": 2.0},
+            "per_dataset": {"ag_news": 5.0},
+        }
+    )
     assert cal.temperature_for("choice", "ag_news") == 5.0
     assert cal.temperature_for("choice", "snli") == 2.0
     assert cal.temperature_for("noul") == 1.0
@@ -77,10 +80,12 @@ def test_invalid_temperature_rejected():
 
 
 def test_unknown_dataset_falls_back_to_primitive():
-    cal = Calibration.from_dict({
-        "per_primitive": {"noul": 4.33},
-        "per_dataset": {"boolq": 2.0},
-    })
+    cal = Calibration.from_dict(
+        {
+            "per_primitive": {"noul": 4.33},
+            "per_dataset": {"boolq": 2.0},
+        }
+    )
     assert cal.temperature_for("noul", "civil_comments") == 4.33
 
 
@@ -114,6 +119,7 @@ def _two_option_request(base_url):
 def test_calibration_end_to_end_temperature(tmp_path):
     """Per-primitive temperature flows through the whole server stack."""
     import json
+
     from serve_helpers import live_server
 
     cal_path = tmp_path / "calib.json"
@@ -152,6 +158,8 @@ def _softmax(z):
     e = [math.exp(x - m) for x in z]
     s = sum(e)
     return [x / s for x in e]
+
+
 V6_FILE = {
     "v6": {
         "per_primitive": {"choice": {"temperature": 1.0}},
@@ -191,9 +199,7 @@ def test_v6_per_class_application_end_to_end():
         answer = body["answers"]["q"]
         probs = answer["probabilities"]
         expected = _softmax([3.0 / 1.0, 2.0 / 2.0, 1.0 / 4.0])
-        for got, want in zip(
-            [probs["a"], probs["b"], probs["c"]], expected
-        ):
+        for got, want in zip([probs["a"], probs["b"], probs["c"]], expected):
             assert got == pytest.approx(want)
         # reported temperature is the scalar fallback (per-dataset)
         assert answer["x_temperature"] == 1.5
@@ -284,14 +290,10 @@ def test_v6_real_files_load():
     cal = Calibration.from_dict(data, key="v6")
     # every shipped dataset has a per-class vector and a legacy scalar
     for ds, entry in data["v6"]["per_dataset"].items():
-        temps = cal.class_temperatures_for(
-            ds, len(entry["calibrator"]["temperatures"])
-        )
+        temps = cal.class_temperatures_for(ds, len(entry["calibrator"]["temperatures"]))
         assert temps is not None
         assert cal.class_temperatures_for(ds, 1) is None  # arity guard
-        assert cal.temperature_for("choice", ds) == pytest.approx(
-            entry["temperature"]
-        )
+        assert cal.temperature_for("choice", ds) == pytest.approx(entry["temperature"])
 
     v5_path = repo / "scripts" / "sft" / "temperature_v5.json"
     if not v5_path.exists():  # pragma: no cover

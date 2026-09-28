@@ -68,9 +68,7 @@ def _check_instructions(value: object) -> str:
     return _check_text(value, "instructions", allow_empty=True)
 
 
-def _check_labels(
-    values: object, name: str, min_count: int, max_count: int
-) -> list:
+def _check_labels(values: object, name: str, min_count: int, max_count: int) -> list:
     if isinstance(values, str) or not isinstance(values, (list, tuple)):
         raise TypeError(f"{name} must be a list of strings")
     labels = list(values)
@@ -114,9 +112,7 @@ class ChoiceQuestion:
     descriptions: Optional[list] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "instructions", _check_instructions(self.instructions)
-        )
+        object.__setattr__(self, "instructions", _check_instructions(self.instructions))
         object.__setattr__(
             self, "options", _check_labels(self.options, "options", 2, MAX_OPTIONS)
         )
@@ -151,9 +147,7 @@ class NoulQuestion:
     if_false: object = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "instructions", _check_instructions(self.instructions)
-        )
+        object.__setattr__(self, "instructions", _check_instructions(self.instructions))
 
 
 @dataclass(frozen=True)
@@ -169,9 +163,7 @@ class ScoreQuestion:
     levels: list
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "instructions", _check_instructions(self.instructions)
-        )
+        object.__setattr__(self, "instructions", _check_instructions(self.instructions))
         object.__setattr__(
             self, "levels", _check_labels(self.levels, "levels", 2, MAX_LEVELS)
         )
@@ -206,13 +198,12 @@ class QuestionSet:
             _check_text(qid, "question id")
             if not isinstance(question, (ChoiceQuestion, NoulQuestion, ScoreQuestion)):
                 raise TypeError(
-                    f"question {qid!r} has unsupported type "
-                    f"{type(question).__name__}"
+                    f"question {qid!r} has unsupported type {type(question).__name__}"
                 )
         object.__setattr__(self, "mapping", mapping)
 
     # -- mapping protocol -------------------------------------------------
- #
+    #
 
     def __getitem__(self, key: str) -> AnyQuestion:
         return self.mapping[key]

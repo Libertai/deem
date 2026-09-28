@@ -116,9 +116,10 @@ pub enum LayerKind {
 pub fn load_config(text: &str) -> std::io::Result<Config> {
     let root: RootConfig = serde_json::from_str(text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let raw = root.text_config.or(root.flat).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "no text_config")
-    })?;
+    let raw = root
+        .text_config
+        .or(root.flat)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no text_config"))?;
 
     let full_attention_interval = raw.full_attention_interval.unwrap_or(4);
     let num_layers = raw.num_hidden_layers.ok_or(missing("num_hidden_layers"))?;
@@ -162,8 +163,12 @@ pub fn load_config(text: &str) -> std::io::Result<Config> {
         intermediate_size: raw.intermediate_size.ok_or(missing("intermediate_size"))?,
         num_layers,
         layer_types,
-        num_heads: raw.num_attention_heads.ok_or(missing("num_attention_heads"))?,
-        num_kv_heads: raw.num_key_value_heads.ok_or(missing("num_key_value_heads"))?,
+        num_heads: raw
+            .num_attention_heads
+            .ok_or(missing("num_attention_heads"))?,
+        num_kv_heads: raw
+            .num_key_value_heads
+            .ok_or(missing("num_key_value_heads"))?,
         head_dim,
         rms_eps: raw.rms_norm_eps.unwrap_or(1e-6) as f32,
         vocab_size: raw.vocab_size.ok_or(missing("vocab_size"))?,

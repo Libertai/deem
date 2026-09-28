@@ -72,7 +72,12 @@ pub fn confidence_from_probabilities(probabilities: &[f32]) -> f32 {
     if n <= 1 {
         return 1.0;
     }
-    (n as f32 * probabilities.iter().cloned().fold(f32::NEG_INFINITY, f32::max) - 1.0)
+    (n as f32
+        * probabilities
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max)
+        - 1.0)
         / (n as f32 - 1.0)
 }
 
@@ -201,7 +206,10 @@ pub fn build_prompt(state: &Value, questions: &QuestionSet, permutations: &Permu
     for (k, (qid, question)) in questions.items.iter().enumerate() {
         let k1 = k + 1;
         lines.push(String::new());
-        lines.push(format!("Question {k1}: {}", question_instructions(question)));
+        lines.push(format!(
+            "Question {k1}: {}",
+            question_instructions(question)
+        ));
         let perm = permutations.get(qid);
         match question {
             Question::Choice { .. } | Question::Score { .. } => {
@@ -366,7 +374,12 @@ pub fn read_answers_with_temps(
         let single = QuestionSet {
             items: vec![(qid.clone(), question.clone())],
         };
-        let mut answers = read_answers(&single, &logits_by_slot[k..k + 1], permutations, temperature);
+        let mut answers = read_answers(
+            &single,
+            &logits_by_slot[k..k + 1],
+            permutations,
+            temperature,
+        );
         out.push(answers.pop().unwrap());
     }
     out

@@ -3,25 +3,53 @@
 import json
 
 import pytest
-
 import report as report_mod
 
-
 FIXTURE = [
-    {"domain": "routing", "question_id": "r1",
-     "probabilities": [0.9, 0.1], "correct_answer": 0},
-    {"domain": "routing", "question_id": "r2",
-     "probabilities": [0.2, 0.8], "correct_answer": 1},
-    {"domain": "routing", "question_id": "r3",
-     "probabilities": [0.6, 0.4], "correct_answer": 1},
-    {"domain": "routing", "question_id": "n1", "kind": "negation",
-     "p_a": 0.72, "p_not_a": 0.47, "ground_truth": True},
-    {"domain": "routing", "question_id": "p1", "kind": "permutation",
-     "predictions": [0, 0, 1]},
-    {"domain": "routing", "question_id": "t1", "kind": "paraphrase",
-     "predictions": [1, 1, 2]},
-    {"domain": "extraction", "question_id": "e1",
-     "probabilities": [1.0, 0.0], "correct_answer": 0},
+    {
+        "domain": "routing",
+        "question_id": "r1",
+        "probabilities": [0.9, 0.1],
+        "correct_answer": 0,
+    },
+    {
+        "domain": "routing",
+        "question_id": "r2",
+        "probabilities": [0.2, 0.8],
+        "correct_answer": 1,
+    },
+    {
+        "domain": "routing",
+        "question_id": "r3",
+        "probabilities": [0.6, 0.4],
+        "correct_answer": 1,
+    },
+    {
+        "domain": "routing",
+        "question_id": "n1",
+        "kind": "negation",
+        "p_a": 0.72,
+        "p_not_a": 0.47,
+        "ground_truth": True,
+    },
+    {
+        "domain": "routing",
+        "question_id": "p1",
+        "kind": "permutation",
+        "predictions": [0, 0, 1],
+    },
+    {
+        "domain": "routing",
+        "question_id": "t1",
+        "kind": "paraphrase",
+        "predictions": [1, 1, 2],
+    },
+    {
+        "domain": "extraction",
+        "question_id": "e1",
+        "probabilities": [1.0, 0.0],
+        "correct_answer": 0,
+    },
 ]
 
 
@@ -46,9 +74,7 @@ def test_report_cli_json(tmp_path):
     path.write_text(json.dumps(FIXTURE))
     got = json.loads(
         __import__("json").dumps(
-            report_mod.build_report(
-                json.loads(path.read_text()), 0.9
-            )
+            report_mod.build_report(json.loads(path.read_text()), 0.9)
         )
     )
     assert "routing" in got

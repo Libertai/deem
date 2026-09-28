@@ -35,18 +35,13 @@ fn i8t_matches_reference() {
         for blk in 0..nb {
             let s = blk * BLK;
             let e = ((blk + 1) * BLK).min(k);
-            wsums[i * nb + blk] = w_q[i * k + s..i * k + e]
-                .iter()
-                .map(|v| *v as i32)
-                .sum();
+            wsums[i * nb + blk] = w_q[i * k + s..i * k + e].iter().map(|v| *v as i32).sum();
         }
     }
-    let out = deem_runtime::kernels::i8t::gemm_i8_tiled(
-        &a, &w_q, &w_scales, &wsums, m, n, k,
-    );
+    let out = deem_runtime::kernels::i8t::gemm_i8_tiled(&a, &w_q, &w_scales, &wsums, m, n, k);
     // reference: exact int8 semantics (weights already quantized above;
     // activations quantized per BLK block with the same scheme)
-use deem_runtime::kernels::i8t::BLK;
+    use deem_runtime::kernels::i8t::BLK;
     let mut worst = 0f32;
     let mut worst_i = 0;
     for mi in 0..m {

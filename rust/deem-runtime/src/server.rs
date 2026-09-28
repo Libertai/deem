@@ -106,7 +106,10 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), Invalid> 
     // Both wire forms, matching parse_questions in serve/deem_server.py:
     let questions: Vec<(String, &Value)> = if let Some(obj) = questions_value.as_object() {
         if obj.is_empty() {
-            return Err(invalid(&["questions"], "must contain at least one question"));
+            return Err(invalid(
+                &["questions"],
+                "must contain at least one question",
+            ));
         }
         obj.iter().map(|(k, v)| (k.clone(), v)).collect()
     } else if let Some(arr) = questions_value.as_array() {
@@ -208,7 +211,8 @@ fn parse_request(body: &Value) -> Result<(Value, Vec<ParsedQuestion>), Invalid> 
                 let (if_true, if_false) = match criteria {
                     None => (None, None),
                     Some(Value::Object(map)) => {
-                        let side = |key: &str| map.get(key).filter(|v| !v.is_null()).map(render_inline);
+                        let side =
+                            |key: &str| map.get(key).filter(|v| !v.is_null()).map(render_inline);
                         (side("true"), side("false"))
                     }
                     Some(_) => {

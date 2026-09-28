@@ -2,11 +2,11 @@
 
 import math
 
-import pytest
-
 import metrics
+import pytest
 from metrics import (
     ConfusionError,
+    auc_of_tradeoff,
     automation_rate_at_accuracy,
     brier,
     derived_confidence,
@@ -14,7 +14,6 @@ from metrics import (
     log_loss,
     reliability_bins,
     risk_coverage_curve,
-    auc_of_tradeoff,
 )
 
 
@@ -117,9 +116,9 @@ class TestDerivedConfidence:
         assert derived_confidence([1.0] + [0.0] * 9) == pytest.approx(1.0)
         assert derived_confidence([0.55] + [0.05] * 9) == pytest.approx(0.5)
         # p_max = 0.28 -> (2.8 - 1) / 9
-        assert derived_confidence([0.28, 0.08, 0.08, 0.08, 0.08,
-                                   0.08, 0.08, 0.08, 0.08, 0.08]) == \
-            pytest.approx(0.2)
+        assert derived_confidence(
+            [0.28, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08]
+        ) == pytest.approx(0.2)
 
     def test_non_normalized(self):
         # [2, 1, 1] normalizes to [0.5, 0.25, 0.25]; (3*0.5 - 1)/2 = 0.25.
@@ -179,11 +178,9 @@ class TestAutomationRate:
         probs = ([[1.0, 0.0]] * 5) + [[0.5, 0.5]] * 5
         correct = [True] * 5 + [True, False, True, False, True]
         # Automating only the certain items: 50% coverage at 100% accuracy.
-        assert automation_rate_at_accuracy(probs, correct, 0.99) == \
-            pytest.approx(0.5)
+        assert automation_rate_at_accuracy(probs, correct, 0.99) == pytest.approx(0.5)
         # Low bar: automate everything (threshold 0 covers all).
-        assert automation_rate_at_accuracy(probs, correct, 0.5) == \
-            pytest.approx(1.0)
+        assert automation_rate_at_accuracy(probs, correct, 0.5) == pytest.approx(1.0)
 
     def test_unreachable_target_returns_zero(self):
         probs = [[0.5, 0.5], [0.5, 0.5]]

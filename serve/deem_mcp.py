@@ -32,8 +32,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from deem_server import (  # noqa: E402
-    Calibration,
     DEFAULT_MODEL_ID,
+    Calibration,
     DeemCore,
     RequestError,
     StubBackend,
@@ -54,8 +54,7 @@ CLASSIFY_SCHEMA = {
             "minItems": 2,
             "maxItems": 255,
         },
-        "dataset": {"type": "string",
-                    "description": "calibration temperature key"},
+        "dataset": {"type": "string", "description": "calibration temperature key"},
     },
     "required": ["state", "instructions", "options"],
 }
@@ -71,8 +70,7 @@ SCORE_SCHEMA = {
             "minItems": 2,
             "maxItems": 10,
         },
-        "dataset": {"type": "string",
-                    "description": "calibration temperature key"},
+        "dataset": {"type": "string", "description": "calibration temperature key"},
     },
     "required": ["state", "instructions", "levels"],
 }
@@ -85,8 +83,7 @@ CHECK_SCHEMA = {
             "type": "string",
             "description": "The proposition to evaluate.",
         },
-        "dataset": {"type": "string",
-                    "description": "calibration temperature key"},
+        "dataset": {"type": "string", "description": "calibration temperature key"},
     },
     "required": ["state", "instructions"],
 }
@@ -133,11 +130,14 @@ class McpServer:
         method = request.get("method")
         params = request.get("params", {})
         if method == "initialize":
-            return self._result(request, {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": SERVER_INFO,
-            })
+            return self._result(
+                request,
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": SERVER_INFO,
+                },
+            )
         if method == "ping":
             return self._result(request, {})
         if method == "tools/list":
@@ -165,9 +165,12 @@ class McpServer:
         args = params.get("arguments", {}) or {}
         if name not in ("classify", "score", "check"):
             return {
-                "content": [{"type": "text", "text": json.dumps(
-                    {"error": f"unknown tool: {name}"}
-                )}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"error": f"unknown tool: {name}"}),
+                    }
+                ],
                 "isError": True,
             }
         try:
@@ -194,21 +197,13 @@ class McpServer:
                         "instructions": args["instructions"],
                     }
                 }
-            result = self.core.decide(
-                args["state"], questions, args.get("dataset")
-            )
+            result = self.core.decide(args["state"], questions, args.get("dataset"))
             answer = result["answers"]["q"]
             answer["usage"] = result["usage"]
-            return {
-                "content": [
-                    {"type": "text", "text": json.dumps(answer)}
-                ]
-            }
+            return {"content": [{"type": "text", "text": json.dumps(answer)}]}
         except (RequestError, KeyError, TypeError, ValueError) as exc:
             return {
-                "content": [{"type": "text", "text": json.dumps(
-                    {"error": str(exc)}
-                )}],
+                "content": [{"type": "text", "text": json.dumps({"error": str(exc)})}],
                 "isError": True,
             }
 
@@ -219,6 +214,7 @@ def make_core():
     if checkpoint:
         import torch  # noqa: F401  (fail fast on missing deps)
         from transformers import AutoModelForCausalLM  # noqa: F401
+
         backend = TorchBackend(
             checkpoint,
             device=os.environ.get("DEEM_DEVICE", "auto"),
@@ -250,10 +246,13 @@ def serve(stdin, stdout):
         except json.JSONDecodeError as exc:
             if '"id"' in line:
                 print(
-                    json.dumps({
-                        "jsonrpc": "2.0", "id": None,
-                        "error": {"code": -32700, "message": str(exc)},
-                    }),
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {"code": -32700, "message": str(exc)},
+                        }
+                    ),
                     file=stdout,
                 )
                 stdout.flush()
@@ -269,7 +268,8 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="Deem MCP stdio server")
     parser.add_argument(
-        "--stub", action="store_true",
+        "--stub",
+        action="store_true",
         help="force the deterministic stub backend (uniform logits)",
     )
     args = parser.parse_args(argv)

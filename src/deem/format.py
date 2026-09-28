@@ -261,9 +261,7 @@ def _validate_permutation(perm: Sequence, n: int, qid: str) -> list:
         raise TypeError(f"permutation for {qid!r} must be a list of option indices")
     perm = list(perm)
     if sorted(perm) != list(range(n)):
-        raise ValueError(
-            f"permutation for {qid!r} is not a permutation of 0..{n - 1}"
-        )
+        raise ValueError(f"permutation for {qid!r} is not a permutation of 0..{n - 1}")
     return perm
 
 
@@ -277,9 +275,7 @@ def _option_lines(question, qid: str, perm: Optional[Sequence]) -> list:
     )
     if labels is None:
         if perm is not None:
-            raise ValueError(
-                f"permutation given for {qid!r}, which has no options"
-            )
+            raise ValueError(f"permutation given for {qid!r}, which has no options")
         return []
     order = (
         list(range(len(labels)))
@@ -356,9 +352,7 @@ def prompt_hash(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _slot_logits(
-    logits_by_slot: Mapping, k: int, qid: str, slot_keys: set
-) -> list:
+def _slot_logits(logits_by_slot: Mapping, k: int, qid: str, slot_keys: set) -> list:
     """Fetch the logits for 1-based slot ``k``; keys may be ``"k"`` or ``k``.
 
     Unknown slot keys are reported together (helps debugging batched inputs).
@@ -372,9 +366,7 @@ def _slot_logits(
     )
 
 
-def _valid_letter_logits(
-    logits: list, n_valid: int, qid: str, what: str
-) -> list:
+def _valid_letter_logits(logits: list, n_valid: int, qid: str, what: str) -> list:
     """Softmax must cover valid letters only: keep the first ``n_valid``
     entries of the letter-logit vector and ignore the rest (e.g. a full
     LM-head row).  Fewer entries than options is an error."""
@@ -407,15 +399,15 @@ def read_answers(
       :class:`~deem.primitives.ScoreResult`.
     """
     if not isinstance(question_set, QuestionSet):
-        raise TypeError(f"question_set must be a QuestionSet, got {type(question_set).__name__}")
+        raise TypeError(
+            f"question_set must be a QuestionSet, got {type(question_set).__name__}"
+        )
     permutations = dict(permutations) if permutations else {}
     results = {}
     for k, (qid, question) in enumerate(question_set.items(), start=1):
         logits = _slot_logits(logits_by_slot, k, qid, logits_by_slot.keys())
         perm = permutations.get(qid)
-        results[qid] = _read_question(
-            question, logits, perm, qid, temperature
-        )
+        results[qid] = _read_question(question, logits, perm, qid, temperature)
     return results
 
 
@@ -553,6 +545,8 @@ def marginalize_score(results) -> ScoreResult:
     expected = sum(i * probabilities[key] for i, key in enumerate(levels))
     confidence = confidence_from_probabilities(list(probabilities.values()))
     return ScoreResult(
-        level=level, probabilities=probabilities, expected=expected,
+        level=level,
+        probabilities=probabilities,
+        expected=expected,
         confidence=confidence,
     )

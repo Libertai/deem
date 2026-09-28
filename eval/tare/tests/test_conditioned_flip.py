@@ -10,8 +10,6 @@ Historical anchors used as regression constants:
 """
 
 import pytest
-
-import metrics
 from metrics import (
     FLIP_GATE_MARGIN,
     ConfusionError,
@@ -74,10 +72,10 @@ class TestConditionedFlipGate:
     def test_v5_signal_datasets_pass(self):
         # (flip_rate, identity acc, N) from scripts/sft/consistency_v5.json.
         for flip, acc, n in [
-            (0.000, 0.900, 4),   # ag_news
-            (0.020, 0.713, 5),   # amazon_reviews
+            (0.000, 0.900, 4),  # ag_news
+            (0.020, 0.713, 5),  # amazon_reviews
             (0.0067, 0.867, 3),  # fever
-            (0.013, 0.887, 3),   # snli
+            (0.013, 0.887, 3),  # snli
         ]:
             assert conditioned_flip_ok(flip, acc, n), (flip, acc, n)
 
@@ -85,11 +83,11 @@ class TestConditionedFlipGate:
         # (flip_rate, held-out tuned accuracy, N) from consistency_v2.json
         # and results_v2_qwen35_08b.json — every dataset must keep failing.
         for flip, acc, n in [
-            (0.993, 0.897, 4),   # ag_news
-            (0.987, 0.378, 5),   # amazon_reviews
-            (0.953, 0.760, 3),   # snli
-            (0.987, 0.253, 4),   # mmlu (barely above chance: null 0.747)
-            (0.920, 0.779, 3),   # fever
+            (0.993, 0.897, 4),  # ag_news
+            (0.987, 0.378, 5),  # amazon_reviews
+            (0.953, 0.760, 3),  # snli
+            (0.987, 0.253, 4),  # mmlu (barely above chance: null 0.747)
+            (0.920, 0.779, 3),  # fever
         ]:
             assert not conditioned_flip_ok(flip, acc, n), (flip, acc, n)
 

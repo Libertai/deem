@@ -2,8 +2,8 @@
 
 use crate::config::{Config, LayerKind};
 use crate::layers::{
-    full_attention_forward, gated_delta_rule, rmsnorm_batch, rmsnorm_gated, sigmoid, Mlp,
-    Linear, RopeTables,
+    full_attention_forward, gated_delta_rule, rmsnorm_batch, rmsnorm_gated, sigmoid, Linear, Mlp,
+    RopeTables,
 };
 use crate::safetensors::SafeTensors;
 
@@ -169,19 +169,41 @@ pub fn load_model(dir: &Path, opts: LoadOptions) -> std::io::Result<Model> {
         m.post_attention_layernorm
             .push(lin(format!("layers.{i}.post_attention_layernorm.weight"))?);
         m.mlp.push(Mlp {
-            gate: qn(format!("layers.{i}.mlp.gate_proj.weight"), m.config.intermediate_size, hidden),
-            up: qn(format!("layers.{i}.mlp.up_proj.weight"), m.config.intermediate_size, hidden),
-            down: qn(format!("layers.{i}.mlp.down_proj.weight"), hidden, m.config.intermediate_size),
+            gate: qn(
+                format!("layers.{i}.mlp.gate_proj.weight"),
+                m.config.intermediate_size,
+                hidden,
+            ),
+            up: qn(
+                format!("layers.{i}.mlp.up_proj.weight"),
+                m.config.intermediate_size,
+                hidden,
+            ),
+            down: qn(
+                format!("layers.{i}.mlp.down_proj.weight"),
+                hidden,
+                m.config.intermediate_size,
+            ),
         });
 
         if m.config.layer_types[i] == LayerKind::LinearAttention {
             let b = lin(format!("layers.{i}.linear_attn.in_proj_b.weight"))?;
             let a = lin(format!("layers.{i}.linear_attn.in_proj_a.weight"))?;
             let conv = lin(format!("layers.{i}.linear_attn.conv1d.weight"))?;
-            m.gdn_qkv.push(qn(format!("layers.{i}.linear_attn.in_proj_qkv.weight"), conv_dim, hidden));
-            m.gdn_z.push(qn(format!("layers.{i}.linear_attn.in_proj_z.weight"), value_dim, hidden));
-            m.gdn_b.push(Linear::from_f32(b, m.config.linear_num_value_heads, hidden));
-            m.gdn_a.push(Linear::from_f32(a, m.config.linear_num_value_heads, hidden));
+            m.gdn_qkv.push(qn(
+                format!("layers.{i}.linear_attn.in_proj_qkv.weight"),
+                conv_dim,
+                hidden,
+            ));
+            m.gdn_z.push(qn(
+                format!("layers.{i}.linear_attn.in_proj_z.weight"),
+                value_dim,
+                hidden,
+            ));
+            m.gdn_b
+                .push(Linear::from_f32(b, m.config.linear_num_value_heads, hidden));
+            m.gdn_a
+                .push(Linear::from_f32(a, m.config.linear_num_value_heads, hidden));
             m.gdn_conv.push(conv);
             m.gdn_dt_bias
                 .push(lin(format!("layers.{i}.linear_attn.dt_bias"))?);
@@ -189,7 +211,11 @@ pub fn load_model(dir: &Path, opts: LoadOptions) -> std::io::Result<Model> {
                 .push(lin(format!("layers.{i}.linear_attn.A_log"))?);
             m.gdn_norm_w
                 .push(lin(format!("layers.{i}.linear_attn.norm.weight"))?);
-            m.gdn_out_proj.push(qn(format!("layers.{i}.linear_attn.out_proj.weight"), hidden, value_dim));
+            m.gdn_out_proj.push(qn(
+                format!("layers.{i}.linear_attn.out_proj.weight"),
+                hidden,
+                value_dim,
+            ));
         } else {
             let qo = if m.config.gated_attention {
                 m.config.num_heads * m.config.head_dim * 2
@@ -197,16 +223,30 @@ pub fn load_model(dir: &Path, opts: LoadOptions) -> std::io::Result<Model> {
                 m.config.num_heads * m.config.head_dim
             };
             let ko = m.config.num_kv_heads * m.config.head_dim;
-            m.attn_q.push(qn(format!("layers.{i}.self_attn.q_proj.weight"), qo, hidden));
-            m.attn_k.push(qn(format!("layers.{i}.self_attn.k_proj.weight"), ko, hidden));
-            m.attn_v.push(qn(format!("layers.{i}.self_attn.v_proj.weight"), ko, hidden));
+            m.attn_q.push(qn(
+                format!("layers.{i}.self_attn.q_proj.weight"),
+                qo,
+                hidden,
+            ));
+            m.attn_k.push(qn(
+                format!("layers.{i}.self_attn.k_proj.weight"),
+                ko,
+                hidden,
+            ));
+            m.attn_v.push(qn(
+                format!("layers.{i}.self_attn.v_proj.weight"),
+                ko,
+                hidden,
+            ));
             m.attn_o.push(qn(
                 format!("layers.{i}.self_attn.o_proj.weight"),
                 hidden,
                 m.config.num_heads * m.config.head_dim,
             ));
-            m.q_norm.push(lin(format!("layers.{i}.self_attn.q_norm.weight"))?);
-            m.k_norm.push(lin(format!("layers.{i}.self_attn.k_norm.weight"))?);
+            m.q_norm
+                .push(lin(format!("layers.{i}.self_attn.q_norm.weight"))?);
+            m.k_norm
+                .push(lin(format!("layers.{i}.self_attn.k_norm.weight"))?);
         }
     }
     m.final_norm = lin("norm.weight".to_string())?;
@@ -267,8 +307,7 @@ impl Model {
         let mut x = vec![0.0f32; t * hidden];
         for (p, tok) in tokens.iter().enumerate() {
             let base = (*tok as usize) * hidden;
-            x[p * hidden..(p + 1) * hidden]
-                .copy_from_slice(&self.embed[base..base + hidden]);
+            x[p * hidden..(p + 1) * hidden].copy_from_slice(&self.embed[base..base + hidden]);
         }
         let mut trace = Vec::with_capacity(self.config.layer_types.len() + 1);
         let mut attn_counter = 0usize;
@@ -279,7 +318,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
-                            self.config.zero_centered_norm,
+                self.config.zero_centered_norm,
             );
             let out = match kind {
                 LayerKind::LinearAttention => self.gdn_forward(i, &normed, t),
@@ -309,7 +348,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
-                            self.config.zero_centered_norm,
+                self.config.zero_centered_norm,
             );
             let mlp_out = self.mlp[i].forward(&normed, t);
             for (a, b) in x.iter_mut().zip(mlp_out.iter()) {
@@ -323,7 +362,7 @@ impl Model {
             self.config.rms_eps,
             t,
             hidden,
-                    self.config.zero_centered_norm,
+            self.config.zero_centered_norm,
         );
         trace.push(final_h);
         trace
@@ -335,8 +374,7 @@ impl Model {
         let mut x = vec![0.0f32; t * hidden];
         for (p, tok) in tokens.iter().enumerate() {
             let base = (*tok as usize) * hidden;
-            x[p * hidden..(p + 1) * hidden]
-                .copy_from_slice(&self.embed[base..base + hidden]);
+            x[p * hidden..(p + 1) * hidden].copy_from_slice(&self.embed[base..base + hidden]);
         }
 
         let mut attn_counter = 0usize;
@@ -348,7 +386,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
-                            self.config.zero_centered_norm,
+                self.config.zero_centered_norm,
             );
             let out = match kind {
                 LayerKind::LinearAttention => {
@@ -392,7 +430,7 @@ impl Model {
                 self.config.rms_eps,
                 t,
                 hidden,
-                            self.config.zero_centered_norm,
+                self.config.zero_centered_norm,
             );
             let start = std::time::Instant::now();
             let mlp_out = self.mlp[i].forward(&normed, t);
@@ -410,7 +448,7 @@ impl Model {
             self.config.rms_eps,
             t,
             hidden,
-                    self.config.zero_centered_norm,
+            self.config.zero_centered_norm,
         )
     }
 }
@@ -463,9 +501,7 @@ impl Model {
         let conv_out = {
             const RB: usize = 64; // rows per job
             let mut co = vec![0.0f32; mixed.len()];
-            let co_ptr = std::sync::Arc::new(std::sync::atomic::AtomicPtr::new(
-                co.as_mut_ptr(),
-            ));
+            let co_ptr = std::sync::Arc::new(std::sync::atomic::AtomicPtr::new(co.as_mut_ptr()));
             let njobs = t.div_ceil(RB);
             (0..njobs).into_par_iter().for_each(|jb| {
                 let co = unsafe {
@@ -486,8 +522,8 @@ impl Model {
                         if src < 0 {
                             continue;
                         }
-                        let in_row = &mixed
-                            [src as usize * conv_dim..src as usize * conv_dim + conv_dim];
+                        let in_row =
+                            &mixed[src as usize * conv_dim..src as usize * conv_dim + conv_dim];
                         crate::kernels::scan::fma_row(
                             &mut acc,
                             &wt[j * conv_dim..(j + 1) * conv_dim],
@@ -520,22 +556,19 @@ impl Model {
             for h in 0..num_heads {
                 let kh = h / gqa.max(1);
                 for d in 0..dk {
-                    q[(p * num_heads + h) * dk + d] =
-                        conv_out[p * conv_dim + kh * dk + d];
+                    q[(p * num_heads + h) * dk + d] = conv_out[p * conv_dim + kh * dk + d];
                     k[(p * num_heads + h) * dk + d] =
                         conv_out[p * conv_dim + key_dim + kh * dk + d];
                     v[(p * num_heads + h) * dv + d] =
                         conv_out[p * conv_dim + 2 * key_dim + h * dv + d];
                 }
                 beta[p * num_heads + h] = sigmoid(b[p * num_heads + h]);
-                g[p * num_heads + h] = -a_log[h].exp()
-                    * softplus(a[p * num_heads + h] + dt_bias[h]);
+                g[p * num_heads + h] =
+                    -a_log[h].exp() * softplus(a[p * num_heads + h] + dt_bias[h]);
             }
         }
 
-        let core = gated_delta_rule(
-            &mut q, &mut k, &v, &beta, &g, t, num_heads, dk, dv, 64,
-        );
+        let core = gated_delta_rule(&mut q, &mut k, &v, &beta, &g, t, num_heads, dk, dv, 64);
 
         // gated norm + out_proj (vectorized over rows)
         let mut normed_out = vec![0.0f32; t * num_heads * dv];

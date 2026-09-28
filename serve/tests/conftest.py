@@ -1,7 +1,6 @@
 """Fixtures for the Deem serving-lane tests."""
 
 import pytest
-
 from serve_helpers import live_server
 
 

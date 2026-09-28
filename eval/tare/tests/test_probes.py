@@ -1,8 +1,7 @@
 """Tests for Tare consistency probes, incl. the Jev 0.72/0.47 case."""
 
-import pytest
-
 import probes
+import pytest
 from probes import (
     negation_consistency_error,
     negation_paired_accuracy,
@@ -19,8 +18,7 @@ class TestJevDocumentedFailure:
 
     def test_consistency_error_is_0_19(self):
         # |P(a) - (1 - P(not a))| = |0.72 - 0.53| = 0.19
-        assert negation_consistency_error(self.PA, self.P_NOT_A) == \
-            pytest.approx(0.19)
+        assert negation_consistency_error(self.PA, self.P_NOT_A) == pytest.approx(0.19)
 
     def test_paired_accuracy_both_directions_correct(self):
         res = negation_paired_accuracy(self.PA, self.P_NOT_A, True)
@@ -61,8 +59,8 @@ class TestNegationProbe:
     def test_batches_and_min_semantics(self):
         # Batch: direction A is right on both items, direction B only once.
         res = negation_paired_accuracy(
-            [0.9, 0.1],   # p_a
-            [0.1, 0.9],   # p_not_a
+            [0.9, 0.1],  # p_a
+            [0.1, 0.9],  # p_not_a
             [True, False],
         )
         assert res["n"] == 2
@@ -106,10 +104,12 @@ class TestPermutationFlipRate:
 
     def test_permuted_pairs_are_canonicalized(self):
         # (position, permutation) where permutation[j] = original id at j.
-        res = permutation_flip_rate([
-            [(0, (2, 0, 1)), (1, (1, 2, 0))],  # -> 2, 2 (no flip)
-            [(0, (0, 1, 2)), (1, (0, 2, 1))],  # -> 0, 1 (flip)
-        ])
+        res = permutation_flip_rate(
+            [
+                [(0, (2, 0, 1)), (1, (1, 2, 0))],  # -> 2, 2 (no flip)
+                [(0, (0, 1, 2)), (1, (0, 2, 1))],  # -> 0, 1 (flip)
+            ]
+        )
         assert res["flipped"] == 1
         assert res["flip_rate"] == pytest.approx(0.5)
 
@@ -130,7 +130,9 @@ class TestParaphraseConsistency:
 
     def test_empty(self):
         assert paraphrase_consistency([]) == {
-            "consistency": 0.0, "mean_majority_agreement": 0.0, "n": 0,
+            "consistency": 0.0,
+            "mean_majority_agreement": 0.0,
+            "n": 0,
         }
 
 

@@ -1,7 +1,6 @@
 """Determinism tests for the Tare hash-based split."""
 
 import pytest
-
 from split import (
     SPLIT_LABELS,
     normalize_text,
@@ -48,17 +47,15 @@ def test_seed_changes_split_without_losing_items():
 
 
 def test_text_normalization_invariance():
-    assert split_for("User is 42. ", "  Refund? ") == \
-        split_for("user is 42.", "refund?")
+    assert split_for("User is 42. ", "  Refund? ") == split_for(
+        "user is 42.", "refund?"
+    )
     assert normalize_text("  A   b\nc ") == "a b c"
 
 
 def test_hash_is_stable():
     # Golden value: changing this means every existing split re-buckets.
-    assert split_hash("", "question")[:8] == split_hash(
-        "", "question"
-    )[:8]
-
+    assert split_hash("", "question")[:8] == split_hash("", "question")[:8]
 
 
 def test_custom_ratios_and_labels():

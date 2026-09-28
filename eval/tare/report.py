@@ -76,16 +76,12 @@ def summarize_domain(records: list[dict], target_acc: float) -> dict:
             metrics.argmax(r["probabilities"]) == int(r["correct_answer"])
             for r in decisions
         ]
-        supplied_conf = [
-            float(r["confidence"]) for r in decisions if "confidence" in r
-        ]
+        supplied_conf = [float(r["confidence"]) for r in decisions if "confidence" in r]
         out.update(
             {
                 "accuracy": sum(correct) / len(correct),
                 "mean_confidence": (
-                    sum(supplied_conf) / len(supplied_conf)
-                    if supplied_conf
-                    else None
+                    sum(supplied_conf) / len(supplied_conf) if supplied_conf else None
                 ),
                 "mean_derived_confidence": sum(
                     metrics.derived_confidence(p) for p in probabilities
@@ -99,12 +95,8 @@ def summarize_domain(records: list[dict], target_acc: float) -> dict:
                         probabilities, correct, target_acc
                     )
                 ),
-                "risk_coverage_auc": metrics.auc_of_tradeoff(
-                    probabilities, correct
-                ),
-                "reliability_bins": metrics.reliability_bins(
-                    probabilities, outcomes
-                ),
+                "risk_coverage_auc": metrics.auc_of_tradeoff(probabilities, correct),
+                "reliability_bins": metrics.reliability_bins(probabilities, outcomes),
             }
         )
     else:
@@ -185,11 +177,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Tare report generator")
     parser.add_argument("results", help="results JSON file")
     parser.add_argument(
-        "--format", choices=("text", "json"), default="text",
+        "--format",
+        choices=("text", "json"),
+        default="text",
         help="output format (default: text)",
     )
     parser.add_argument(
-        "--target-acc", type=float, default=0.90,
+        "--target-acc",
+        type=float,
+        default=0.90,
         help="target accuracy for the automation-rate metric (default 0.90)",
     )
     args = parser.parse_args(argv)

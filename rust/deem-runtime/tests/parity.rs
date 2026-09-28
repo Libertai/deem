@@ -62,8 +62,8 @@ fn report(name: &str, got: &[f32], want: &[f32]) -> f32 {
 
 #[test]
 fn parity_tokenizer() {
-    let ckpt = std::env::var("DEEM_PARITY_CKPT")
-        .unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
+    let ckpt =
+        std::env::var("DEEM_PARITY_CKPT").unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
     if !Path::new(&ckpt).exists() {
         eprintln!("checkpoint {ckpt} not found locally; skipping");
         return;
@@ -82,8 +82,8 @@ fn parity_tokenizer() {
 
 #[test]
 fn parity_reference() {
-    let ckpt = std::env::var("DEEM_PARITY_CKPT")
-        .unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
+    let ckpt =
+        std::env::var("DEEM_PARITY_CKPT").unwrap_or_else(|_| "Qwen/Qwen3.5-0.8B".to_string());
     let ckpt_dir = Path::new(&ckpt);
     if !ckpt_dir.exists() {
         eprintln!("checkpoint {ckpt} not found locally; skipping");
@@ -98,11 +98,8 @@ fn parity_reference() {
         .map(|v| v == "1")
         .unwrap_or(false);
 
-    let model = deem_runtime::model::load_model(
-        ckpt_dir,
-        deem_runtime::LoadOptions { quantize },
-    )
-    .expect("model load");
+    let model = deem_runtime::model::load_model(ckpt_dir, deem_runtime::LoadOptions { quantize })
+        .expect("model load");
 
     // 1) embeddings
     let hidden = model.config.hidden_size;
@@ -116,8 +113,7 @@ fn parity_reference() {
         let mut got = vec![0.0f32; t * hidden];
         for (p, tok) in tokens.iter().enumerate() {
             let base = (*tok as usize) * hidden;
-            got[p * hidden..(p + 1) * hidden]
-                .copy_from_slice(&model.embed[base..base + hidden]);
+            got[p * hidden..(p + 1) * hidden].copy_from_slice(&model.embed[base..base + hidden]);
         }
         let d = report("embed", &got, &embed_ref);
         assert!(d < 0.01, "embed diff too large");
@@ -168,7 +164,8 @@ fn parity_reference() {
     let tok = deem_runtime::tokenizer::Tokenizer::load(ckpt_dir).unwrap();
     for (i, id) in ref_letter_ids.iter().enumerate() {
         assert_eq!(
-            tok.letter_ids[i], *id as u32,
+            tok.letter_ids[i],
+            *id as u32,
             "letter {} id mismatch",
             b'A' + i as u8
         );

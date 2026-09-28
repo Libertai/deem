@@ -7,7 +7,11 @@ fn exp16_accuracy() {
     for i in 0..xs.len() {
         let want = (xs[i] as f64).exp();
         let got = v[i] as f64;
-        let rel = if want == 0.0 { 0.0 } else { (got - want).abs() / want };
+        let rel = if want == 0.0 {
+            0.0
+        } else {
+            (got - want).abs() / want
+        };
         if rel > worst as f64 {
             worst = rel as f32;
         }

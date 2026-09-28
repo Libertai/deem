@@ -7,8 +7,16 @@ fn main() {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "Qwen/Qwen3.5-0.8B".to_string());
-    let n_tokens: usize = args.get(2).cloned().and_then(|s| s.parse().ok()).unwrap_or(300);
-    let runs: usize = args.get(3).cloned().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let n_tokens: usize = args
+        .get(2)
+        .cloned()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    let runs: usize = args
+        .get(3)
+        .cloned()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
 
     let tokens: Vec<u32> = (0..n_tokens as u32).map(|i| 100000 + i % 500).collect();
 
